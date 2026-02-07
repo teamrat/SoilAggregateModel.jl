@@ -19,12 +19,12 @@ O2(t) = 0.3    # μg/mm³
 
 # Run 30-day simulation (default outputs every day or so)
 result = run_aggregate(bio, soil, T, ψ, O2, (0.0, 30.0);
-                      n_grid=50, dt_initial=0.01)
+                      n_grid=500, dt_initial=0.01)
 
 # === Compute diagnostics ===
 
 # Grid setup
-n_grid = 50
+n_grid = 500
 r_0 = 0.1
 r_max = 2.0
 h = (r_max - r_0) / (n_grid - 1)

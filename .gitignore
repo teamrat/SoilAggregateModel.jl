@@ -21,3 +21,7 @@ Thumbs.db
 
 # Backup files
 *.bak
+
+# Development notes (local only)
+dev_notes/
+CLAUDE.md

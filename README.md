@@ -138,10 +138,7 @@ SoilAggregateModel.jl/
 ├── docs/                     # Documentation
 │   ├── ARCHITECTURE.md       # Implementation architecture (authoritative)
 │   ├── GUIDE.md              # Theory, usage, developer guide
-│   ├── REFERENCE.md          # Variables, parameters, functions
-│   ├── PARAMETER_BUG_REPORT.md
-│   ├── REPO_REORGANIZATION.md
-│   └── archive/              # Historical documents
+│   └── REFERENCE.md          # Variables, parameters, functions
 │
 ├── scripts/                  # Diagnostic scripts
 │   └── diagnostics_30day.jl  # 30-day simulation with detailed diagnostics
@@ -153,7 +150,6 @@ SoilAggregateModel.jl/
 │   ├── figures/              # Output figures (syncs to Overleaf)
 │   └── data/                 # Simulation outputs
 │
-├── CLAUDE.md                 # Instructions for Claude Code
 ├── Project.toml              # Julia package manifest
 └── README.md                 # This file
 ```
@@ -200,8 +196,6 @@ Decisions made during the manuscript→code verification (2026-02-05/06):
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — Implementation architecture (authoritative for solver design)
 - **[docs/GUIDE.md](docs/GUIDE.md)** — Theory, usage, developer guide
 - **[docs/REFERENCE.md](docs/REFERENCE.md)** — Variables, parameters, functions (quick lookup)
-- **[docs/PARAMETER_BUG_REPORT.md](docs/PARAMETER_BUG_REPORT.md)** — Bug fixes and parameter corrections
-- **Manuscript** — Authoritative for all physics equations (see docs/archive/)
 
 ---
 
