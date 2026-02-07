@@ -1,0 +1,23 @@
+# Generated outputs
+diagnostics_30day_output.txt
+paper/figures/*.pdf
+paper/figures/*.png
+!paper/figures/.gitkeep
+
+# Julia
+*.jl.cov
+*.jl.mem
+Manifest.toml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+*.swp
+*.swo
+*~
+.vscode/
+
+# Backup files
+*.bak

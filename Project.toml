@@ -1,0 +1,15 @@
+name = "SoilAggregateModel"
+uuid = "8a7e1234-5678-9abc-def0-123456789abc"
+authors = ["Teamrat Ghezzehei and contributors"]
+version = "2.0.0"
+
+[deps]
+
+[compat]
+julia = "1.9"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]
