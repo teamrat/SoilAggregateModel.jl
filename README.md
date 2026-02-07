@@ -25,8 +25,8 @@ A mechanistic model of soil aggregate formation and carbon cycling. The model so
 ### Installation
 
 ```bash
-git clone https://github.com/teamrat/aggregate.git
-cd aggregate
+git clone https://github.com/teamrat/SoilAggregateModel.jl.git
+cd SoilAggregateModel.jl
 julia --project=. -e 'using Pkg; Pkg.instantiate()'
 ```
 
@@ -82,7 +82,7 @@ Total state: 8n + 1 (+ cumulative CO₂ diagnostic).
 ## Project Structure
 
 ```
-aggregate/
+SoilAggregateModel.jl/
 ├── src/                      # Source code (SoilAggregateModel module)
 │   ├── SoilAggregateModel.jl # Main module file
 │   ├── types.jl              # AggregateState, Workspace, TemperatureCache
