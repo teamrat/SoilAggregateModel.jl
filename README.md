@@ -1,7 +1,7 @@
-# Soil Aggregate Model — Julia v2
+# SoilAggregateModel.jl
 
-**Last Updated**: 2026-02-06  
-**Status**: Kernel modules verified against manuscript; solver assembly in progress
+**Last Updated**: 2026-02-06
+**Status**: ✅ Complete — 524/524 tests passing, carbon conservation to machine precision
 
 ---
 
@@ -9,7 +9,55 @@
 
 A mechanistic model of soil aggregate formation and carbon cycling. The model solves 9 coupled equations (5 diffusion PDEs + 3 local ODEs + 1 scalar ODE) on a fixed spherical grid, using Strang-split Crank–Nicolson diffusion and pointwise reactions with adaptive time-stepping.
 
-**Target**: 400 aggregates × n = 1500 × 10 years, with zero heap allocations in the hot loop.
+**Performance target**: 400 aggregates × 1500 grid points × 10 years, with zero heap allocations in the hot loop.
+
+**Key features**:
+- Custom Crank-Nicolson solver with Thomas algorithm (O(n) per species)
+- Strang splitting (second-order operator splitting)
+- Adaptive timestep control
+- Exact carbon conservation (< 10⁻¹² relative error)
+- Temperature-dependent rates via Arrhenius kinetics
+
+---
+
+## Quick Start
+
+### Installation
+
+```bash
+git clone https://github.com/teamrat/aggregate.git
+cd aggregate
+julia --project=. -e 'using Pkg; Pkg.instantiate()'
+```
+
+### Run Tests
+
+```bash
+julia --project=. test/runtests.jl
+```
+
+### Basic Usage
+
+```julia
+using SoilAggregateModel
+
+# Set up parameters
+bio = BiologicalProperties()
+soil = SoilProperties()
+
+# Define environmental drivers (constant or time-varying)
+T(t) = 293.15  # Temperature [K]
+ψ(t) = -10.0   # Water potential [kPa]
+O2(t) = 0.3    # Ambient O₂ [μg/mm³]
+
+# Run 30-day simulation
+result = run_aggregate(bio, soil, T, ψ, O2, (0.0, 30.0))
+
+# Access results
+for output in result.outputs
+    println("t = ", output.t, " days: POM = ", output.state.P, " μg-C")
+end
+```
 
 ---
 
@@ -34,48 +82,80 @@ Total state: 8n + 1 (+ cumulative CO₂ diagnostic).
 ## Project Structure
 
 ```
-src/
-├── types.jl                  # AggregateState, Workspace, TemperatureCache
-├── parameters.jl             # BiologicalProperties, SoilProperties + defaults
-├── environment.jl            # EnvironmentalDrivers{FT,Fψ,FO}
+aggregate/
+├── src/                      # Source code (SoilAggregateModel module)
+│   ├── SoilAggregateModel.jl # Main module file
+│   ├── types.jl              # AggregateState, Workspace, TemperatureCache
+│   ├── parameters.jl         # BiologicalProperties, SoilProperties
+│   ├── constants.jl          # Physical constants (R_GAS)
+│   ├── environment.jl        # EnvironmentalDrivers{FT,Fψ,FO}
+│   │
+│   ├── temperature/          # Temperature dependencies
+│   │   ├── arrhenius.jl      # Arrhenius factor
+│   │   ├── diffusion_pure.jl # Stokes-Einstein, Han-Bartels, Chapman-Enskog
+│   │   └── henry.jl          # Henry's law K_H(T)
+│   │
+│   ├── physics/              # Soil physics
+│   │   ├── water_retention.jl    # Modified van Genuchten θ(ψ, E, F_i)
+│   │   └── effective_diffusion.jl # Tortuosity-limited diffusion
+│   │
+│   ├── biology/              # Biological processes
+│   │   ├── bacteria.jl       # Bacterial growth, mortality, recycling
+│   │   ├── fungi.jl          # Fungal growth, transitions, translocation
+│   │   ├── eps.jl            # EPS production and recycling
+│   │   └── maoc.jl           # MAOC sorption (Langmuir-Freundlich)
+│   │
+│   ├── carbon/               # Carbon cycling
+│   │   └── pom_dissolution.jl # Enzymatic POM breakdown
+│   │
+│   ├── solver/               # Numerical solver
+│   │   ├── tridiagonal.jl        # Thomas algorithm
+│   │   ├── crank_nicolson.jl     # CN diffusion step
+│   │   ├── finite_volumes.jl     # Conservation weights
+│   │   ├── reactions.jl          # Source/sink terms
+│   │   ├── diffusion_step.jl     # 5-species diffusion
+│   │   ├── reaction_step.jl      # Local reactions + POM + CO₂
+│   │   ├── workspace_updates.jl  # Update caches once per timestep
+│   │   └── timestepper.jl        # Strang splitting + adaptive Δt
+│   │
+│   └── api.jl                # Public API (run_aggregate)
 │
-├── temperature/
-│   ├── arrhenius.jl          # arrhenius(Ea, T, T_ref)
-│   ├── diffusion_pure.jl     # Stokes-Einstein+VFT, Han-Bartels, Chapman-Enskog
-│   └── henry.jl              # K_H(T) via van't Hoff (sign-corrected)
+├── test/                     # Test suite (524 tests)
+│   ├── runtests.jl           # Main test runner
+│   ├── test_types.jl         # Data structures
+│   ├── test_parameters.jl    # BiologicalProperties, SoilProperties
+│   ├── test_environment.jl   # EnvironmentalDrivers
+│   ├── test_temperature.jl   # Arrhenius, diffusion, Henry's law
+│   ├── test_tridiagonal.jl   # Thomas algorithm
+│   ├── test_crank_nicolson.jl # CN solver + BCs
+│   ├── test_physics.jl       # Water retention, effective diffusion
+│   ├── test_biology.jl       # Bacteria, fungi, EPS, MAOC
+│   ├── test_pom.jl           # POM dissolution
+│   ├── test_reactions.jl     # Source/sink computation
+│   ├── test_timestepper.jl   # Time integration, adaptive Δt
+│   └── test_api.jl           # User-facing API
 │
-├── physics/
-│   ├── water_retention.jl    # θ(ψ, E, F_i) — modified van Genuchten
-│   └── effective_diffusion.jl # D_C, D_B, D_Fn, D_Fm, D_O
+├── docs/                     # Documentation
+│   ├── ARCHITECTURE.md       # Implementation architecture (authoritative)
+│   ├── GUIDE.md              # Theory, usage, developer guide
+│   ├── REFERENCE.md          # Variables, parameters, functions
+│   ├── PARAMETER_BUG_REPORT.md
+│   ├── REPO_REORGANIZATION.md
+│   └── archive/              # Historical documents
 │
-├── biology/
-│   ├── bacteria.jl           # R_B, R_Bb, h_B, Γ_B, Γ_E, Resp_B
-│   ├── fungi.jl              # R_F, Π, transitions, Resp_F, Resp_F_conv, h_Fi
-│   ├── eps.jl                # R_rec_E (uses C_aq), h_E
-│   └── maoc.jl               # J_M with softplus, M_eq Langmuir-Freundlich
+├── scripts/                  # Diagnostic scripts
+│   └── diagnostics_30day.jl  # 30-day simulation with detailed diagnostics
 │
-├── carbon/
-│   └── pom_dissolution.jl    # J_P (flux density) and R_P = 4πr₀²·J_P
+├── paper/                    # Manuscript materials
+│   ├── simulations/          # Figure generation scripts
+│   │   ├── common.jl         # Shared parameters
+│   │   └── README.md
+│   ├── figures/              # Output figures (syncs to Overleaf)
+│   └── data/                 # Simulation outputs
 │
-├── solver/
-│   ├── tridiagonal.jl        # Thomas algorithm (in-place)
-│   ├── crank_nicolson.jl     # CN half-step for one species
-│   ├── diffusion_step.jl     # 5 tridiagonal solves
-│   ├── reactions.jl          # All source/sink terms at one node
-│   ├── reaction_step.jl      # Loop over nodes + POM + CO₂
-│   └── timestepper.jl        # Strang splitting + adaptive Δt
-│
-└── api.jl                    # run_aggregate() entry point
-
-test/
-├── runtests.jl
-├── test_types.jl
-├── test_parameters.jl
-├── test_temperature.jl
-├── test_environment.jl
-├── test_tridiagonal.jl
-├── test_physics.jl
-└── test_biology.jl
+├── CLAUDE.md                 # Instructions for Claude Code
+├── Project.toml              # Julia package manifest
+└── README.md                 # This file
 ```
 
 ---
@@ -117,10 +197,11 @@ Decisions made during the manuscript→code verification (2026-02-05/06):
 
 ## Documentation
 
-- **[GUIDE.md](GUIDE.md)** — Theory, usage, developer guide
-- **[REFERENCE.md](REFERENCE.md)** — Variables, parameters, functions (quick lookup)
-- **[ARCHITECTURE_CLAUDE_CODE.md](ARCHITECTURE_CLAUDE_CODE.md)** — Implementation architecture (authoritative for solver design)
-- **Manuscript** (`manuscript_updated.tex`) — Authoritative for all physics equations
+- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — Implementation architecture (authoritative for solver design)
+- **[docs/GUIDE.md](docs/GUIDE.md)** — Theory, usage, developer guide
+- **[docs/REFERENCE.md](docs/REFERENCE.md)** — Variables, parameters, functions (quick lookup)
+- **[docs/PARAMETER_BUG_REPORT.md](docs/PARAMETER_BUG_REPORT.md)** — Bug fixes and parameter corrections
+- **Manuscript** — Authoritative for all physics equations (see docs/archive/)
 
 ---
 
@@ -140,8 +221,14 @@ All internal computations use: **μg, mm, days, kPa, K, J/mol**. No unit convers
 ## Background
 
 - **2016–2025**: MATLAB implementation (pdepe). Established core physics.
-- **2026-01**: Julia v1 (DifferentialEquations.jl/CVODE monolithic solver).
-- **2026-02**: Julia v2 (Strang splitting, zero-allocation design). Added MAOC pool, Arrhenius temperature framework, enzymatic POM dissolution.
+- **2026-01**: Julia port attempt (abandoned — poorly implemented).
+- **2026-02**: **First working Julia version**. Custom Strang splitting solver, zero-allocation design. Added MAOC pool, Arrhenius temperature framework, enzymatic POM dissolution.
+
+**Development** (2026-02):
+- Complete rewrite with custom Crank-Nicolson solver
+- Verification against manuscript equations
+- Parameter corrections (ρ_b, ρ_POM, λ, K_Y units)
+- 524 tests, carbon conservation to machine precision
 
 **Theoretical basis**: Ghezzehei, T.A. et al. (2026), manuscript in preparation.
 
