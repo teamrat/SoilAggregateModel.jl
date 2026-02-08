@@ -1,42 +1,83 @@
-# common.jl — Shared parameter sets and utilities for paper figures
+# common.jl — Canonical parameter sets and utilities for Phase 2
 #
-# Usage: include("common.jl") at the top of each figure script
+# Usage: include("../common.jl") at the top of each theme's run_simulations.jl
 #
-# This file defines the EXACT parameter sets used in the published paper.
-# Do not modify after publication without documenting the change.
+# This file defines the EXACT parameter sets used for single-aggregate analyses.
+# These values must not be changed after figures are generated without re-running
+# all affected themes.
 
 using SoilAggregateModel
-using CairoMakie  # or whatever plotting package you choose
+using Printf
 
-# === Canonical parameter set (medium-textured soil, temperate climate) ===
-# These override the package defaults where needed for the paper simulations.
+# ═══════════════════════════════════════════════════════════════
+# STANDARD reference: medium-textured temperate soil
+# Used for: radial profiles, carbon fate, stability lag, life cycles
+# ═══════════════════════════════════════════════════════════════
 
-const PAPER_BIO = BiologicalProperties(
-    # Override defaults as needed for paper
-    # Example: r_B_max = 5.0, ...
-)
+STANDARD_BIO = BiologicalProperties()    # all defaults
+STANDARD_SOIL = SoilProperties()         # all defaults
 
-const PAPER_SOIL = SoilProperties(
-    # Override defaults as needed for paper
-    # Example: k_d_eq = 0.05, ...
-)
+# Standard environmental conditions
+STANDARD_T = 293.15        # 20°C
+STANDARD_ψ = -33.0         # field capacity [kPa]
+STANDARD_O2 = 0.27         # ambient O₂ [μg/mm³] (≈21% atmospheric)
 
-# === Standard environmental conditions ===
-const T_STANDARD = 293.15    # 20°C
-const ψ_STANDARD = -33.0     # Field capacity [kPa]
+# Standard POM
+STANDARD_r_0 = 0.25        # 0.5 mm diameter POM [mm]
+STANDARD_r_max = 5.0       # domain extends to 5 mm [mm]
+STANDARD_n_grid = 100      # grid resolution
 
-# === Figure output ===
-const FIGURE_DIR = joinpath(@__DIR__, "..", "figures")
-mkpath(FIGURE_DIR)
+# ═══════════════════════════════════════════════════════════════
+# Output time schedules
+# ═══════════════════════════════════════════════════════════════
+
+# 60-month run with monthly output (for carbon fate, MAOC, stability)
+TIMES_60mo = Float64.([0; collect(1:60) .* 30.44])
+
+# Dense early + sparse late (for capturing initial dynamics)
+TIMES_DENSE = Float64.(vcat(
+    0:0.5:7,                        # every 0.5 days for first week
+    8:1:30,                         # daily for first month
+    collect(2:6) .* 30.44,          # monthly months 2-6
+    collect(9:3:60) .* 30.44        # every 3 months after that
+))
+
+# Snapshot times for radial profiles (months → days)
+SNAPSHOT_MONTHS = [1, 6, 12, 24, 48]
+SNAPSHOT_TIMES = Float64.(SNAPSHOT_MONTHS .* 30.44)
+
+# ═══════════════════════════════════════════════════════════════
+# Helper: write a NamedTuple or struct of vectors to CSV
+# ═══════════════════════════════════════════════════════════════
 
 """
-    savepaperfig(fig, name)
+    write_csv(filename, data::NamedTuple)
 
-Save figure to paper/figures/ as both PDF and PNG.
-PDF goes to Overleaf via Dropbox sync.
+Write a NamedTuple of equal-length vectors to CSV.
+Compatible with R's readr::read_csv().
+
+# Arguments
+- `filename`: Output CSV path
+- `data`: NamedTuple with equal-length vector fields
+
+# Example
+```julia
+data = (t=[0.0, 1.0, 2.0], x=[1.0, 2.0, 3.0])
+write_csv("output.csv", data)
+```
 """
-function savepaperfig(fig, name)
-    save(joinpath(FIGURE_DIR, name * ".pdf"), fig)
-    save(joinpath(FIGURE_DIR, name * ".png"), fig, px_per_unit=3)
-    println("Saved: $name.pdf and $name.png")
+function write_csv(filename, data)
+    names = keys(data)
+    n = length(data[first(names)])
+
+    open(filename, "w") do io
+        # Header
+        println(io, join(string.(names), ","))
+        # Data rows
+        for i in 1:n
+            vals = [data[k][i] for k in names]
+            println(io, join([@sprintf("%.10g", v) for v in vals], ","))
+        end
+    end
+    println("  Wrote $filename ($n rows, $(length(names)) columns)")
 end

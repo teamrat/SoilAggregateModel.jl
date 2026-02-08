@@ -20,9 +20,11 @@ import SoilAggregateModel: create_initial_state, compute_total_carbon, compute_c
                               n_grid=20, dt_initial=0.01)
 
         # Check structure
-        @test haskey(result, :times)
-        @test haskey(result, :outputs)
-        @test haskey(result, :diagnostics)
+        @test result isa SimulationResult
+        @test result.grid isa GridInfo
+        @test result.params isa ParameterSet
+        @test result.outputs isa Vector{OutputRecord}
+        @test result.diagnostics isa Dict
 
         # Check outputs
         @test length(result.outputs) > 0
@@ -53,9 +55,9 @@ import SoilAggregateModel: create_initial_state, compute_total_carbon, compute_c
         @test all(state.B .> 0.0)
         @test all(state.F_n .> 0.0)
         @test all(state.F_m .> 0.0)
-        @test all(state.F_i .> 0.0)
-        @test all(state.E .> 0.0)
-        @test all(state.M .> 0.0)
+        @test all(state.F_i .>= 0.0)  # F_i starts at 0 (develops over time)
+        @test all(state.E .>= 0.0)   # E starts at 0 (produced by bacteria)
+        @test all(state.M .>= 0.0)   # M starts at 0 (accumulates from sorption)
         @test all(state.O .> 0.0)
 
         # POM should match initial value

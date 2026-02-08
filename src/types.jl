@@ -231,3 +231,53 @@ function Base.copy(state::AggregateState)
         state.CO2_cumulative
     )
 end
+
+#═══════════════════════════════════════════════════════════════════════════════
+# Grid Information
+#═══════════════════════════════════════════════════════════════════════════════
+
+"""
+    GridInfo
+
+Immutable record of the radial grid and precomputed conservation weights.
+
+Fields:
+- `r_grid::Vector{Float64}`: Radial coordinates [mm], length n
+- `h::Float64`: Grid spacing [mm]
+- `r_0::Float64`: POM radius (inner boundary) [mm]
+- `r_max::Float64`: Outer boundary [mm]
+- `n::Int`: Number of grid points
+- `W::Vector{Float64}`: Conservation weights W[i] = 4π r[i]² h [mm³], length n
+
+The conservation weights are stencil-matched to the spherical Laplacian discretization.
+All volumetric integration must use these weights.
+"""
+struct GridInfo
+    r_grid::Vector{Float64}
+    h::Float64
+    r_0::Float64
+    r_max::Float64
+    n::Int
+    W::Vector{Float64}
+end
+
+"""
+    GridInfo(n::Int, r_0::Real, r_max::Real)
+
+Construct a GridInfo with uniform spacing and precomputed conservation weights.
+
+# Arguments
+- `n::Int`: Number of grid points
+- `r_0::Real`: Inner boundary (POM radius) [mm]
+- `r_max::Real`: Outer boundary [mm]
+
+# Returns
+- `GridInfo`: Grid geometry with conservation weights W[i] = 4π r[i]² h
+"""
+function GridInfo(n::Int, r_0::Real, r_max::Real)
+    h = (r_max - r_0) / (n - 1)
+    r_grid = [r_0 + i * h for i in 0:n-1]
+    W = [4.0 * π * r_grid[i]^2 * h for i in 1:n]
+    GridInfo(r_grid, h, Float64(r_0), Float64(r_max), n, W)
+end
+

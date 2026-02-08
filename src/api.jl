@@ -30,10 +30,12 @@ Run a soil aggregate biogeochemical simulation.
 - `output_times::Vector{<:Real}`: Specific times to save output (default: regular intervals)
 
 # Returns
-Named tuple with:
-- `times::Vector{Float64}`: Output times [days]
+`SimulationResult` with fields:
+- `grid::GridInfo`: Grid geometry and conservation weights
+- `params::ParameterSet`: Parameters used (bio and soil)
+- `env::EnvironmentalDrivers`: Environmental driver functions
 - `outputs::Vector{OutputRecord}`: State snapshots with diagnostics
-- `diagnostics::Dict`: Simulation diagnostics (steps, rejections, etc.)
+- `diagnostics::Dict`: Simulation diagnostics (n_steps, final_time, etc.)
 
 # Examples
 
@@ -51,6 +53,10 @@ result = run_aggregate(bio, soil, T, ψ, O2, (0.0, 30.0))
 for rec in result.outputs
     println("Time ", rec.t, ": POM = ", rec.state.P, " μg-C")
 end
+
+# Access grid information
+println("Grid points: ", result.grid.n)
+println("Conservation weights: ", result.grid.W)
 ```
 
 # Manuscript reference
@@ -66,8 +72,10 @@ function run_aggregate(bio::BiologicalProperties, soil::SoilProperties,
     t_start, t_end = t_span
 
     # === Setup grid ===
-    h = (r_max - r_0) / (n_grid - 1)
-    r_grid = [r_0 + i*h for i in 0:n_grid-1]
+    grid = GridInfo(n_grid, r_0, r_max)
+
+    # === Environment ===
+    env = EnvironmentalDrivers(T_func, ψ_func, O2_func)
 
     # === Initialize state ===
     if initial_state === nothing
@@ -79,41 +87,41 @@ function run_aggregate(bio::BiologicalProperties, soil::SoilProperties,
     # === Create workspace ===
     workspace = Workspace(n_grid)
 
-    # === Determine output times ===
+    # === Output schedule ===
     if isempty(output_times)
-        # Default: output every day
-        output_interval = min(1.0, (t_end - t_start) / 10)
+        # Interval-based output (default)
+        interval = min(1.0, (t_end - t_start) / 10)
+        scheduled = Float64[]
     else
-        output_interval = NaN  # Will use explicit output_times
+        # User-specified output times
+        interval = NaN  # Not used when output_times is specified
+        scheduled = Float64.(output_times)
     end
 
     # === Compute initial total carbon (true reference for balance) ===
-    C_total_initial = compute_total_carbon(state, r_grid, h)
+    C_total_initial = compute_total_carbon(state, grid.r_grid, grid.h)
 
     # === Run simulation ===
     result = run_simulation(
-        state, workspace, r_grid, h, bio, soil,
+        state, workspace, grid.r_grid, grid.h, bio, soil,
         T_func, ψ_func, O2_func,
         t_start, t_end, dt_initial;
         dt_min=dt_min, dt_max=dt_max,
-        output_interval=output_interval
+        output_interval=interval,
+        output_times=scheduled
     )
 
-    # === Convert to OutputRecord format with diagnostics ===
+    # === Package outputs ===
     outputs = OutputRecord[]
     for i in 1:length(result.times)
-        t = result.times[i]
-        state_snapshot = result.states[i]
-
-        # Compute carbon balance diagnostic
-        mass_balance_error = compute_carbon_balance_error(
-            state_snapshot, r_grid, h, C_total_initial
-        )
-
-        push!(outputs, OutputRecord(t, state_snapshot, mass_balance_error))
+        error = compute_carbon_balance_error(result.states[i], grid.r_grid, grid.h, C_total_initial)
+        push!(outputs, OutputRecord(result.times[i], result.states[i], error))
     end
 
-    return (times=result.times, outputs=outputs, diagnostics=result.diagnostics)
+    params = ParameterSet(bio, soil)
+    # Convert diagnostics to Dict{String, Any} to match SimulationResult field type
+    diagnostics_any = Dict{String, Any}(result.diagnostics)
+    return SimulationResult(grid, params, env, outputs, diagnostics_any)
 end
 
 """
@@ -129,23 +137,39 @@ Create default initial state with uniform pools.
 - `AggregateState`: Initial state with small uniform pools and full POM
 
 # Notes
-- C, B, F_n, F_m, F_i, E, M: Small uniform values (1.0 μg/mm³)
-- O: Ambient level (0.3 μg/mm³)
+Physically realistic initialization for POM-driven aggregate formation:
+- C: Background DOC (0.01 μg/mm³)
+- B: Minimum viable bacteria (bio.B_min, ~0.1 μg/mm³)
+- F_n, F_m: Small fungal seed (B_min/10, ~0.01 μg/mm³)
+- F_i: No insulated fungi initially (0.0 μg/mm³, develops over time)
+- E: No EPS initially (0.0 μg/mm³, produced by bacteria)
+- M: No MAOC initially (0.0 μg/mm³, accumulates from DOC sorption)
+- O: Ambient O₂ (0.27 μg/mm³, ~21% atmospheric)
 - P: Initial POM mass from bio.P_0
 - CO2_cumulative: 0.0
+
+This initialization ensures POM dissolution is the primary carbon source,
+allowing microbial populations to grow from seed values and aggregate
+structure to emerge organically.
 """
 function create_initial_state(n::Int, bio::BiologicalProperties)
     state = AggregateState(n)
 
-    # Small uniform pools
-    state.C .= 1.0      # DOC
-    state.B .= 1.0      # Bacteria
-    state.F_n .= 1.0    # Non-insulated fungi
-    state.F_m .= 0.1    # Mobile fungi
-    state.F_i .= 0.5    # Insulated fungi
-    state.E .= 1.0      # EPS
-    state.M .= 1.0      # MAOC
-    state.O .= 0.3      # Oxygen (ambient)
+    # Background DOC (trace concentration)
+    state.C .= 0.01
+
+    # Minimum viable microbial seed
+    state.B .= bio.B_min           # Bacteria at minimum viable
+    state.F_n .= bio.B_min / 10    # Small fungal seed
+    state.F_m .= bio.B_min / 100   # Even smaller mobile pool
+    state.F_i .= 0.0               # Insulated fungi develop over time
+
+    # Pools that develop over time
+    state.E .= 0.0    # EPS produced by bacteria
+    state.M .= 0.0    # MAOC accumulates from DOC sorption
+
+    # Ambient oxygen
+    state.O .= 0.27   # ~21% atmospheric O₂
 
     # Initial POM from parameters
     state.P = bio.P_0

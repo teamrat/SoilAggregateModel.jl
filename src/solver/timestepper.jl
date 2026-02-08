@@ -8,7 +8,8 @@
                    T_func, ψ_func, O2_func,
                    t_start::Real, t_end::Real, dt_initial::Real;
                    dt_min::Real=1e-4, dt_max::Real=0.1,
-                   output_interval::Real=1.0)
+                   output_interval::Real=1.0,
+                   output_times::Vector{Float64}=Float64[])
 
 Run aggregate simulation with Strang splitting and adaptive timestep.
 
@@ -28,6 +29,7 @@ Run aggregate simulation with Strang splitting and adaptive timestep.
 - `dt_min::Real`: Minimum allowed timestep [days] (default: 1e-4)
 - `dt_max::Real`: Maximum allowed timestep [days] (default: 0.1)
 - `output_interval::Real`: Time between outputs [days] (default: 1.0)
+- `output_times::Vector{Float64}`: User-specified output times (default: empty, use interval)
 
 # Returns
 Named tuple with:
@@ -55,15 +57,27 @@ function run_simulation(state::AggregateState, workspace::Workspace,
                        T_func, ψ_func, O2_func,
                        t_start::Real, t_end::Real, dt_initial::Real;
                        dt_min::Real=1e-4, dt_max::Real=0.1,
-                       output_interval::Real=1.0)
+                       output_interval::Real=1.0,
+                       output_times::Vector{Float64}=Float64[])
     # Initialize
     t = t_start
     dt = dt_initial
-    next_output = t_start + output_interval
 
-    # Storage for outputs
-    output_times = Float64[t_start]
-    output_states = [deepcopy(state)]
+    # Output schedule
+    if !isempty(output_times)
+        # User-specified: sort, deduplicate, ensure t_start and t_end included, filter to range
+        scheduled = sort(unique([t_start; Float64.(output_times); t_end]))
+        filter!(t -> t_start <= t <= t_end, scheduled)
+        use_scheduled = true
+        sched_idx = 2  # 1 is t_start, saved immediately below
+    else
+        use_scheduled = false
+        next_output = t_start + output_interval
+    end
+
+    # Save initial state
+    saved_times = Float64[t_start]
+    saved_states = [deepcopy(state)]
 
     # Diagnostics
     n_steps = 0
@@ -76,9 +90,15 @@ function run_simulation(state::AggregateState, workspace::Workspace,
             dt = t_end - t
         end
 
-        # Don't overshoot output time
-        if t + dt > next_output
-            dt = next_output - t
+        # Don't overshoot next output target
+        if use_scheduled
+            if sched_idx <= length(scheduled) && t + dt > scheduled[sched_idx]
+                dt = scheduled[sched_idx] - t
+            end
+        else
+            if t + dt > next_output
+                dt = next_output - t
+            end
         end
 
         # === Get environmental conditions ===
@@ -108,7 +128,8 @@ function run_simulation(state::AggregateState, workspace::Workspace,
                      bio.K_B_P, bio.K_F_P, bio.θ_P, bio.L_P)
 
         # Convert flux density to total rate [μg-C/day]
-        R_P_val = R_P(J_P_val, bio.r_0)
+        # CRITICAL: Use actual POM radius from grid, not bio.r_0 default
+        R_P_val = R_P(J_P_val, r_grid[1])
 
         # === Strang splitting ===
         # 1. Diffusion half-step (flux enters C via BC)
@@ -135,11 +156,19 @@ function run_simulation(state::AggregateState, workspace::Workspace,
         end
         dt = dt_new
 
-        # === Save output if at output time ===
-        if abs(t - next_output) < 1e-10 || t >= t_end
-            push!(output_times, t)
-            push!(output_states, deepcopy(state))
-            next_output += output_interval
+        # === Save output at target times ===
+        if use_scheduled
+            if sched_idx <= length(scheduled) && abs(t - scheduled[sched_idx]) < 1e-10
+                push!(saved_times, t)
+                push!(saved_states, deepcopy(state))
+                sched_idx += 1
+            end
+        else
+            if abs(t - next_output) < 1e-10 || t >= t_end
+                push!(saved_times, t)
+                push!(saved_states, deepcopy(state))
+                next_output += output_interval
+            end
         end
     end
 
@@ -150,7 +179,7 @@ function run_simulation(state::AggregateState, workspace::Workspace,
         "final_time" => t
     )
 
-    return (times=output_times, states=output_states, diagnostics=diagnostics)
+    return (times=saved_times, states=saved_states, diagnostics=diagnostics)
 end
 
 """

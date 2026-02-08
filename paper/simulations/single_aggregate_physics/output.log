@@ -1,0 +1,51 @@
+======================================================================
+Theme 1: Single Aggregate Physics
+======================================================================
+POM: 0.5 mm diameter
+Conditions: T=20°C, ψ=-33 kPa, O₂=21%
+Duration: 60 months (1826.4 days)
+
+Running simulation...
+  Completed: 18721 timesteps
+  Carbon conservation: max relative error = 0.0003130750932079524
+┌ Warning: Conservation error exceeds tolerance! Expected < 1e-12, got 0.0003130750932079524
+└ @ Main ~/Library/CloudStorage/Dropbox/Research/AGGREGATE/paper/simulations/single_aggregate_physics/run_simulations.jl:44
+
+Exporting timeseries...
+  Wrote data/timeseries.csv (61 rows, 19 columns)
+Exporting radial profiles...
+  Wrote data/radial_profiles.csv (500 rows, 11 columns)
+Exporting CO2 flux...
+  Wrote data/co2_flux.csv (61 rows, 4 columns)
+Exporting aqueous concentrations...
+  Wrote data/aqueous_1mo.csv (100 rows, 3 columns)
+  Wrote data/aqueous_6mo.csv (100 rows, 3 columns)
+  Wrote data/aqueous_12mo.csv (100 rows, 3 columns)
+  Wrote data/aqueous_24mo.csv (100 rows, 3 columns)
+  Wrote data/aqueous_48mo.csv (100 rows, 3 columns)
+
+======================================================================
+Theme 1 Complete
+======================================================================
+
+Qualitative physics checks:
+----------------------------------------------------------------------
+  POM: 1000.0 → 999.8 μg-C (100.0% remaining)
+┌ Warning:   ⚠  POM not depleted enough after 60 months (expected <50%, got 100.0%)
+└ @ Main ~/Library/CloudStorage/Dropbox/Research/AGGREGATE/paper/simulations/single_aggregate_physics/run_simulations.jl:170
+  r_agg: peak = 5.0 mm, final = 5.0 mm
+┌ Warning:   ⚠  r_agg did not grow significantly above r_0
+└ @ Main ~/Library/CloudStorage/Dropbox/Research/AGGREGATE/paper/simulations/single_aggregate_physics/run_simulations.jl:185
+  MAOC: 531.1 → 443.7 μg-C (-87.4 net increase)
+┌ Warning:   ⚠  MAOC not accumulating much (expected continuous increase)
+└ @ Main ~/Library/CloudStorage/Dropbox/Research/AGGREGATE/paper/simulations/single_aggregate_physics/run_simulations.jl:193
+┌ Warning:   ⚠  MAOC decoupling not clear (M_total ≈ M_agg at end)
+└ @ Main ~/Library/CloudStorage/Dropbox/Research/AGGREGATE/paper/simulations/single_aggregate_physics/run_simulations.jl:206
+  CO₂ flux: peaks at 0.0 months
+  ✓  CO₂ flux peaks reasonably early
+┌ Warning:   ⚠  Radial profiles nearly flat (expected sharp C gradient near POM)
+└ @ Main ~/Library/CloudStorage/Dropbox/Research/AGGREGATE/paper/simulations/single_aggregate_physics/run_simulations.jl:227
+----------------------------------------------------------------------
+
+All CSVs exported to data/
+Ready for R analysis

@@ -23,6 +23,7 @@ include("constants.jl")
 include("types.jl")
 include("parameters.jl")
 include("environment.jl")
+include("result.jl")
 
 # Temperature dependencies
 include("temperature/arrhenius.jl")
@@ -55,9 +56,19 @@ include("solver/timestepper.jl")
 # API
 include("api.jl")
 
+# Post-processing
+include("postprocessing/helpers.jl")
+include("postprocessing/aggregate_radius.jl")
+include("postprocessing/integration.jl")
+include("postprocessing/derived.jl")
+include("postprocessing/radial_profiles.jl")
+
 # Exports
 export BiologicalProperties, SoilProperties
 export AggregateState, OutputRecord
+export GridInfo, ParameterSet, SimulationResult, IntegratedPools
 export run_aggregate
+export compute_r_agg, integrated_pools, carbon_balance_table, radial_profiles
+export aqueous_concentrations, maoc_equilibrium, respiration_rates, carbon_use_efficiency, co2_flux
 
 end  # module SoilAggregateModel

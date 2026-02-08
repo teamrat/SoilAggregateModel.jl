@@ -51,4 +51,20 @@ using SoilAggregateModel
     @testset "Time-stepping Integration" begin
         include("test_timestepper.jl")
     end
+
+    @testset "User API" begin
+        include("test_api.jl")
+    end
+
+    @testset "Result Structures" begin
+        include("test_result_struct.jl")
+    end
+
+    @testset "Output Times" begin
+        include("test_output_times.jl")
+    end
+
+    @testset "Post-processing" begin
+        include("test_postprocessing.jl")
+    end
 end
