@@ -45,9 +45,220 @@ if max_error > 1e-12
 end
 println()
 
+# Compute integrated pools (needed for diagnostics)
+pools = integrated_pools(result)
+
+# --- Fungal transition diagnostics at POM surface (node 0) ---
+println("="^70)
+println("Fungal Transition Diagnostics at POM Surface (r = r_0)")
+println("="^70)
+import SoilAggregateModel: Pi_protected, fungal_transitions
+
+diagnostic_times = [0.0, 1.0, 7.0, 30.0, 6*30.44]  # 0, 1 day, 7 days, 30 days, 6 months
+diagnostic_indices = Int[]
+for t_target in diagnostic_times
+    # Find closest output time
+    idx = argmin(abs.(pools.t .- t_target))
+    push!(diagnostic_indices, idx)
+end
+
+for (i, idx) in enumerate(diagnostic_indices)
+    rec = result.outputs[idx]
+    t = rec.t
+    t_days = round(t, digits=2)
+    t_months = round(t / 30.44, digits=2)
+
+    # Extract state at node 0 (POM surface)
+    F_i_0 = rec.state.F_i[1]
+    F_n_0 = rec.state.F_n[1]
+    F_m_0 = rec.state.F_m[1]
+
+    # Compute protection ratio
+    ε_F = STANDARD_BIO.ε_F
+    Π = Pi_protected(F_m_0, F_i_0, F_n_0, ε_F)
+
+    # Compute transition terms (temperature-corrected)
+    env_vals = result.env.T(t), result.env.ψ(t), result.env.O2(t)
+    T = env_vals[1]
+    f_T_bac = exp(-STANDARD_BIO.Ea_B / 8.314 * (1/T - 1/STANDARD_BIO.T_ref))
+    f_T_fun = exp(-STANDARD_BIO.Ea_F / 8.314 * (1/T - 1/STANDARD_BIO.T_ref))
+
+    α_i_T = STANDARD_BIO.α_i * f_T_fun
+    α_n_T = STANDARD_BIO.α_n * f_T_fun
+    β_i_T = STANDARD_BIO.β_i * f_T_fun
+    β_n_T = STANDARD_BIO.β_n * f_T_fun
+    ζ_T = STANDARD_BIO.ζ * f_T_fun
+
+    trans = fungal_transitions(F_i_0, F_n_0, F_m_0, Π, α_i_T, α_n_T, β_i_T, β_n_T,
+                              ζ_T, STANDARD_BIO.delta, STANDARD_BIO.η_conv, ε_F)
+
+    # Compute net rates manually for clarity
+    Π_delta = Π^STANDARD_BIO.delta
+    net_i_raw = β_i_T * Π - α_i_T * Π_delta
+    net_n_raw = β_n_T * Π - α_n_T * Π_delta
+
+    println()
+    println("Time: $(t_days) days ($(t_months) months)")
+    println("  Fungal pools [μg/mm³]:")
+    println("    F_i = $(round(F_i_0, digits=6))")
+    println("    F_n = $(round(F_n_0, digits=6))")
+    println("    F_m = $(round(F_m_0, digits=6))")
+    println("  Protection ratio: Π = $(round(Π, digits=6))")
+    println("  Net transition rates [μg/mm³/day]:")
+    println("    net_i (raw) = β_i·Π - α_i·Π^δ = $(round(net_i_raw * F_i_0, digits=8))")
+    println("    net_n (raw) = β_n·Π - α_n·Π^δ = $(round(net_n_raw * F_n_0, digits=8))")
+    println("  Actual fluxes:")
+    println("    trans_i (η·net_i·F_i) = $(round(trans.trans_i, digits=8))")
+    println("    trans_n (η·net_n·F_n) = $(round(trans.trans_n, digits=8))")
+    println("    insulation (ζ·F_n → F_i) = $(round(trans.insulation, digits=8))")
+    println("  Net change to F_n [μg/mm³/day]:")
+    println("    dF_n/dt ≈ trans_n - insulation = $(round(trans.trans_n - trans.insulation, digits=8))")
+
+    # === Bacterial budget diagnostics ===
+    println()
+    println("  Bacterial dynamics at node 0:")
+
+    # Get state at node 0
+    B_0 = rec.state.B[1]
+    C_0 = rec.state.C[1]
+    O_0 = rec.state.O[1]
+
+    # Compute environment at node 0
+    soil = STANDARD_SOIL
+    ψ_val = STANDARD_ψ
+
+    # Water content
+    s_e = (1.0 + abs(soil.α_vg * ψ_val)^soil.n_vg)^(-(soil.n_vg - 1.0) / soil.n_vg)
+    θ = soil.θ_r + (soil.θ_s - soil.θ_r) * s_e
+    θ_a = soil.θ_s - θ
+
+    # Aqueous concentrations
+    C_aq = C_0 / (θ + soil.ρ_b * soil.k_d_eq)
+    K_H_O = 0.032
+    O_aq = O_0 * θ / (θ + K_H_O * θ_a)
+
+    # Bacterial rates
+    r_B_max_T = STANDARD_BIO.r_B_max * f_T_bac
+
+    # R_B: gross uptake
+    import SoilAggregateModel: R_B, R_Bb, Y_B_func, Gamma_B, R_rec_B, h_B
+    R_B_val = R_B(C_aq, O_aq, B_0, ψ_val, r_B_max_T, STANDARD_BIO.K_B,
+                  STANDARD_BIO.L_B, STANDARD_BIO.ν_B)
+
+    # R_Bb: basal metabolic uptake
+    R_Bb_val = R_Bb(STANDARD_BIO.C_B, O_aq, B_0, r_B_max_T, STANDARD_BIO.K_B,
+                    STANDARD_BIO.L_B, STANDARD_BIO.B_min)
+
+    # R_diff: uptake available for growth
+    R_diff = R_B_val - R_Bb_val
+
+    # Y_B: flexible yield (space-limited)
+    Y_B_val = Y_B_func(R_diff, STANDARD_BIO.Y_B_max, STANDARD_BIO.K_Y, B_0, STANDARD_BIO.B_S, STANDARD_BIO.ε_Y)
+
+    # Γ_B: bacterial growth
+    Γ_B_val = Gamma_B(R_B_val, R_Bb_val, Y_B_val, STANDARD_BIO.γ, STANDARD_BIO.ε_Y)
+
+    # R_rec_B: bacterial death
+    μ_B_T = STANDARD_BIO.μ_B * f_T_bac
+    R_rec_B_val = R_rec_B(μ_B_T, B_0, STANDARD_BIO.B_min)
+
+    # Net dB/dt
+    dB_dt = Γ_B_val - R_rec_B_val
+
+    println("    B = $(round(B_0, digits=6)) μg/mm³")
+    println("    R_B (gross uptake) = $(round(R_B_val, digits=8)) μg-C/mm³/day")
+    println("    R_Bb (basal metabolism) = $(round(R_Bb_val, digits=8)) μg-C/mm³/day")
+    println("    R_diff (for growth) = $(round(R_diff, digits=8)) μg-C/mm³/day")
+    println("    Y_B (flexible yield) = $(round(Y_B_val, digits=6))")
+    println("    Γ_B (growth) = $(round(Γ_B_val, digits=8)) μg-C/mm³/day")
+    println("    R_rec_B (death) = $(round(R_rec_B_val, digits=8)) μg-C/mm³/day")
+    println("    Net dB/dt = Γ_B - R_rec_B = $(round(dB_dt, digits=8)) μg-C/mm³/day")
+
+    # === F_m budget diagnostics ===
+    if i == 1  # Only for t=0
+        println()
+        println("  F_m budget analysis at t=0:")
+
+        # Compute fungal uptake R_F at node 0
+        soil = STANDARD_SOIL
+        ψ_val = STANDARD_ψ  # -33 kPa (field capacity)
+
+        # Van Genuchten water content
+        s_e = (1.0 + abs(soil.α_vg * ψ_val)^soil.n_vg)^(-(soil.n_vg - 1.0) / soil.n_vg)
+        θ = soil.θ_r + (soil.θ_s - soil.θ_r) * s_e
+        θ_a = soil.θ_s - θ
+
+        C = rec.state.C[1]
+        O = rec.state.O[1]
+
+        # Aqueous concentrations
+        C_aq = C / (θ + soil.ρ_b * soil.k_d_eq)
+        K_H_O = 0.032  # Approximate Henry's constant at 20°C
+        O_aq = O * θ / (θ + K_H_O * θ_a)
+
+        # Fungal uptake R_F
+        r_F_max_T = STANDARD_BIO.r_F_max * f_T_fun
+        R_F_val = r_F_max_T * (C_aq / (STANDARD_BIO.K_F + C_aq)) *
+                  (O_aq / (STANDARD_BIO.L_F + O_aq)) *
+                  (F_i_0 + STANDARD_BIO.λ * F_n_0) *
+                  exp(STANDARD_BIO.ν_F * STANDARD_ψ)
+
+        # Γ_F (growth entering F_m)
+        Y_F_val = STANDARD_BIO.Y_F
+        Γ_F_val = Y_F_val * R_F_val
+
+        # Mobilization flux into F_m
+        # When net_i < 0 or net_n < 0, mass flows into F_m
+        # Total mobilization = -(trans_i + trans_n) when negative
+        mobilization_source = 0.0
+        if trans.trans_i < 0
+            mobilization_source -= trans.trans_i
+        end
+        if trans.trans_n < 0
+            mobilization_source -= trans.trans_n
+        end
+
+        # Diffusive flux out of node 0 (spherical geometry)
+        # J_diff ≈ -D × ∂F_m/∂r at r_0
+        # Use finite difference: (F_m[2] - F_m[1]) / h
+        h = result.grid.h
+        F_m_1 = rec.state.F_m[2]
+        dFm_dr = (F_m_1 - F_m_0) / h
+
+        # Diffusion coefficient for F_m
+        D_Fm = STANDARD_BIO.D_Fm0  # mm²/day
+
+        # Flux density [μg/mm²/day]
+        J_diff = -D_Fm * dFm_dr
+
+        # Total flux through spherical surface at r_0 [μg/day]
+        r_0 = result.grid.r_0
+        A_0 = 4.0 * π * r_0^2
+        Flux_diff_total = J_diff * A_0
+
+        # Convert to volumetric rate [μg/mm³/day] in node 0
+        # Volume of shell 0: V_0 ≈ 4πr_0²h
+        V_0 = A_0 * h
+        diffusive_loss_rate = Flux_diff_total / V_0
+
+        println("    Sources [μg/mm³/day]:")
+        println("      Γ_F (fungal growth) = $(round(Γ_F_val, digits=8))")
+        println("      Mobilization (from F_i+F_n) = $(round(mobilization_source, digits=8))")
+        println("    Sinks [μg/mm³/day]:")
+        println("      Diffusive loss = $(round(diffusive_loss_rate, digits=8))")
+        println("      Immobilization (β·Π terms) = $(round(max(0, trans.trans_i + trans.trans_n), digits=8))")
+        println()
+        println("    C_aq at node 0 = $(round(C_aq, digits=8)) μg/mm³")
+        println("    O_aq at node 0 = $(round(O_aq, digits=8)) μg/mm³")
+        println("    Fungal uptake biomass (F_i + λ·F_n) = $(round(F_i_0 + STANDARD_BIO.λ * F_n_0, digits=8)) μg/mm³")
+        println("    R_F = $(round(R_F_val, digits=8)) μg-C/mm³/day")
+    end
+end
+println("="^70)
+println()
+
 # --- CSV 1: Integrated pools timeseries (both domains) ---
 println("Exporting timeseries...")
-pools = integrated_pools(result)
 
 timeseries_data = (
     t_days = pools.t,

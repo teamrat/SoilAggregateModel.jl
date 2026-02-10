@@ -84,16 +84,16 @@ function compute_source_terms(C::Real, B::Real, F_n::Real, F_m::Real, F_i::Real,
     R_B_val = R_B(C_aq, O_aq, B, ψ, r_B_max_T, bio.K_B, bio.L_B, bio.ν_B)
     R_Bb_val = R_Bb(bio.C_B, O_aq, B, r_B_max_T, bio.K_B, bio.L_B, bio.B_min)
 
-    # Yield (depends on uptake - maintenance difference)
+    # Yield (depends on uptake - maintenance difference, and space limitation)
     R_diff = R_B_val - R_Bb_val
-    Y_B_val = Y_B_func(R_diff, bio.Y_B_max, bio.K_Y)
+    Y_B_val = Y_B_func(R_diff, bio.Y_B_max, bio.K_Y, B, bio.B_S, bio.ε_Y)
 
     # Growth
-    Γ_B_val = Gamma_B(R_B_val, R_Bb_val, Y_B_val, bio.γ)
-    Γ_E_val = Gamma_E(R_B_val, R_Bb_val, Y_B_val, bio.γ)
+    Γ_B_val = Gamma_B(R_B_val, R_Bb_val, Y_B_val, bio.γ, bio.ε_Y)
+    Γ_E_val = Gamma_E(R_B_val, R_Bb_val, Y_B_val, bio.γ, bio.ε_Y)
 
     # Respiration and recycling
-    Resp_B_val = Resp_B(R_Bb_val, R_diff, Y_B_val)
+    Resp_B_val = Resp_B(R_Bb_val, R_diff, Y_B_val, bio.ε_Y)
     R_rec_B_val = R_rec_B(μ_B_T, B, bio.B_min)
 
     # Total recycled carbon from bacteria
@@ -115,8 +115,8 @@ function compute_source_terms(C::Real, B::Real, F_n::Real, F_m::Real, F_i::Real,
     # Uptake (NOTE: R_F takes F_i, F_n as separate arguments, NOT F_m)
     R_F_val = R_F(C_aq, O_aq, F_i, F_n, bio.λ, ψ, r_F_max_T, bio.K_F, bio.L_F, bio.ν_F)
 
-    # Yield (constant for fungi)
-    Y_F_val = Y_F_const(bio.Y_F)
+    # Yield (space-limited)
+    Y_F_val = Y_F_func(bio.Y_F, F_i, F_n, F_m, bio.F_S)
 
     # Growth
     Γ_F_val = Gamma_F(Y_F_val, R_F_val)
