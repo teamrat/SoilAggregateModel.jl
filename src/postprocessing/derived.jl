@@ -209,13 +209,13 @@ function respiration_rates(record::OutputRecord, grid::GridInfo,
         R_B_val = R_B(C_aq, O_aq, B, ψ, r_B_max_T, bio.K_B, bio.L_B, bio.ν_B)
         R_Bb_val = R_Bb(bio.C_B, O_aq, B, r_B_max_T, bio.K_B, bio.L_B, bio.B_min)
         R_diff = R_B_val - R_Bb_val
-        Y_B_val = Y_B_func(R_diff, bio.Y_B_max, bio.K_Y)
-        Resp_B_val = Resp_B(R_Bb_val, R_diff, Y_B_val)
+        Y_B_val = Y_B_func(R_diff, bio.Y_B_max, bio.K_Y, B, bio.B_S, bio.ε_Y)
+        Resp_B_val = Resp_B(R_Bb_val, R_diff, Y_B_val, bio.ε_Y)
 
         # Fungal respiration
         r_F_max_T = bio.r_F_max * f_T.f_fun
         R_F_val = R_F(C_aq, O_aq, F_i, F_n, bio.λ, ψ, r_F_max_T, bio.K_F, bio.L_F, bio.ν_F)
-        Y_F_val = Y_F_const(bio.Y_F)
+        Y_F_val = Y_F_func(bio.Y_F, F_i, F_n, F_m, bio.F_S)
         Resp_F_val = Resp_F(R_F_val, Y_F_val)
 
         # Fungal conversion respiration (from transitions)
@@ -313,8 +313,8 @@ function carbon_use_efficiency(record::OutputRecord, grid::GridInfo,
         R_B_val = R_B(C_aq, O_aq, B, ψ, r_B_max_T, bio.K_B, bio.L_B, bio.ν_B)
         R_Bb_val = R_Bb(bio.C_B, O_aq, B, r_B_max_T, bio.K_B, bio.L_B, bio.B_min)
         R_diff = R_B_val - R_Bb_val
-        Y_B_val = Y_B_func(R_diff, bio.Y_B_max, bio.K_Y)
-        Γ_B_val = Gamma_B(R_B_val, R_Bb_val, Y_B_val, bio.γ)
+        Y_B_val = Y_B_func(R_diff, bio.Y_B_max, bio.K_Y, B, bio.B_S, bio.ε_Y)
+        Γ_B_val = Gamma_B(R_B_val, R_Bb_val, Y_B_val, bio.γ, bio.ε_Y)
 
         # CUE_B = Γ_B / R_B (avoid division by zero)
         if R_B_val > 1e-15
@@ -326,7 +326,7 @@ function carbon_use_efficiency(record::OutputRecord, grid::GridInfo,
         # Fungal CUE
         r_F_max_T = bio.r_F_max * f_T.f_fun
         R_F_val = R_F(C_aq, O_aq, F_i, F_n, bio.λ, ψ, r_F_max_T, bio.K_F, bio.L_F, bio.ν_F)
-        Y_F_val = Y_F_const(bio.Y_F)
+        Y_F_val = Y_F_func(bio.Y_F, F_i, F_n, F_m, bio.F_S)
         Γ_F_val = Gamma_F(Y_F_val, R_F_val)
 
         # CUE_F = Γ_F / R_F (avoid division by zero)

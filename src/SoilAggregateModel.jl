@@ -34,6 +34,9 @@ include("temperature/henry.jl")
 include("physics/water_retention.jl")
 include("physics/effective_diffusion.jl")
 
+# Math utilities
+include("math_utils.jl")
+
 # Biology
 include("biology/bacteria.jl")
 include("biology/fungi.jl")

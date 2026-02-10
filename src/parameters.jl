@@ -29,10 +29,12 @@ struct BiologicalProperties
     ν_B::Float64            # Water potential sensitivity [1/kPa]
     Y_B_max::Float64        # Maximum growth yield [-]
     K_Y::Float64            # Half-saturation for yield [μg-C/mm³/day]
+    ε_Y::Float64            # Softplus smoothing width for yield transition [μg-C/mm³/day]
     γ::Float64              # EPS allocation fraction [-]
     C_B::Float64            # Basal carbon requirement [μg/mm³]
     μ_B::Float64            # Mortality rate at T_ref [1/day]
     B_min::Float64          # Minimum viable biomass [μg/mm³]
+    B_S::Float64            # Half-saturation for space limitation on bacterial yield [μg/mm³]
     Ea_B::Float64           # Activation energy [J/mol]
 
     # --- Fungal ---
@@ -40,9 +42,10 @@ struct BiologicalProperties
     K_F::Float64            # Half-saturation for DOC [μg/mm³]
     L_F::Float64            # Half-saturation for O₂ [μg/mm³]
     ν_F::Float64            # Water potential sensitivity [1/kPa]
-    Y_F::Float64            # Growth yield [-]
+    Y_F::Float64            # Base growth yield [-]
     μ_F::Float64            # Mortality rate at T_ref [1/day]
     F_i_min::Float64        # Minimum viable insulated biomass [μg/mm³]
+    F_S::Float64            # Half-saturation for space limitation on fungal yield (total F_i+F_n+F_m) [μg/mm³]
     Ea_F::Float64           # Activation energy [J/mol] — shared by ALL fungal rates
 
     # --- Fungal transitions ---
@@ -101,75 +104,78 @@ the manuscript or calibration.
 All fields can be overridden via keyword arguments.
 """
 function BiologicalProperties(;
-    # Bacterial (defaults are placeholders)
-    r_B_max = 5.0,
-    K_B = 50.0,
-    L_B = 0.1,
-    ν_B = 0.01,
-    Y_B_max = 0.5,
-    K_Y = 1.0,
-    γ = 0.3,
-    C_B = 10.0,
-    μ_B = 0.01,
-    B_min = 0.1,
+    # Bacterial (from REFERENCE.md)
+    r_B_max = 2.0,
+    K_B = 1.0e-4,
+    L_B = 0.00129,
+    ν_B = 5.8e-4,
+    Y_B_max = 0.7,
+    K_Y = 3.33e-4,      # Derived: 10 * r_B_max * C_B/(K_B+C_B) * B_min = 3.33 * 1e-4 [μg/mm³/day]
+    ε_Y = 3.33e-6,      # Derived: K_Y / 100, softplus smoothing width [μg-C/mm³/day]
+    γ = 0.2,
+    C_B = 2.0e-5,       # Derived: K_B/5
+    μ_B = 0.012,
+    B_min = 1.0e-4,
+    B_S = 0.5,          # [μg/mm³] = 0.5 kg/m³, half-saturation for space limitation
     Ea_B = 60_000.0,
 
-    # Fungal
-    r_F_max = 3.0,
-    K_F = 100.0,
-    L_F = 0.05,
-    ν_F = 0.005,
-    Y_F = 0.4,
-    μ_F = 0.005,
-    F_i_min = 0.1,
+    # Fungal (from REFERENCE.md)
+    r_F_max = 2.0,
+    K_F = 1.0e-4,
+    L_F = 0.00129,
+    ν_F = 7.58e-5,
+    Y_F = 0.6,
+    μ_F = 0.012,
+    F_i_min = 1.0e-4,
+    F_S = 0.2,          # [μg/mm³] = 0.2 kg/m³, half-saturation for space limitation (total fungi)
     Ea_F = 55_000.0,
 
-    # Fungal transitions
+    # Fungal transitions (from REFERENCE.md)
     α_i = 0.1,
-    α_n = 0.05,
-    β_i = 0.2,
-    β_n = 0.15,
-    delta = 1.5,
-    η_conv = 0.9,
-    ζ = 0.01,
-    λ = 0.05,           # Fraction at uptake surfaces (λ ≪ 1; FIXED: was 0.5)
+    α_n = 0.15,
+    β_i = 0.0,
+    β_n = 0.15,         # was 0.0. Immobilization rate, non-insulated [1/day]
+    delta = 2.0,
+    η_conv = 0.8,
+    ζ = 0.2,
+    λ = 0.05,
     D_Fn0 = 0.01,
     D_Fm0 = 1.0,
-    ε_F = 1e-10,
+    ε_F = 1e-4,
 
-    # EPS
-    μ_E_max = 0.1,
-    K_E = 5.0,          # [μg/mm³] in C_aq units (FIXED: was 200.0 for total C scale)
-    E_min = 0.1,
+    # EPS (from REFERENCE.md)
+    μ_E_max = 0.002,
+    K_E = 0.001,        # Derived: 50 * C_B = 50 * 2e-5
+    E_min = 1.0e-4,
     Ea_EPS = 50_000.0,
 
-    # MAOC
-    κ_s_ref = 0.001,
-    κ_d_ref = 0.0001,
+    # MAOC (from REFERENCE.md)
+    κ_s_ref = 0.1,
+    κ_d_ref = 0.01,
     Ea_MAOC_sorb = 25_000.0,
     Ea_MAOC_desorb = 40_000.0,
     ε_maoc = 0.01,
 
-    # POM
-    R_P_max = 0.5,
+    # POM (from REFERENCE.md)
+    R_P_max = 1.0,
     P_0 = 1000.0,
     r_0 = 0.1,
     θ_P = 0.1,
-    L_P = 0.05,
-    K_B_P = 1.0,
-    K_F_P = 1.0,
-    ρ_POM = 500.0,      # [μg-C/mm³] ≈ 0.5 g-C/cm³ (FIXED: was 1.0e6)
+    L_P = 0.00129,
+    K_B_P = 1.0e-3,
+    K_F_P = 1.0e-3,
+    ρ_POM = 200.0,
     Ea_POM = 60_000.0,
 
     # Oxygen
-    α_O = 2.67,
+    α_O = 2.2,
 
     # Reference
     T_ref = 293.15
 )
     BiologicalProperties(
-        r_B_max, K_B, L_B, ν_B, Y_B_max, K_Y, γ, C_B, μ_B, B_min, Ea_B,
-        r_F_max, K_F, L_F, ν_F, Y_F, μ_F, F_i_min, Ea_F,
+        r_B_max, K_B, L_B, ν_B, Y_B_max, K_Y, ε_Y, γ, C_B, μ_B, B_min, B_S, Ea_B,
+        r_F_max, K_F, L_F, ν_F, Y_F, μ_F, F_i_min, F_S, Ea_F,
         α_i, α_n, β_i, β_n, delta, η_conv, ζ, λ, D_Fn0, D_Fm0, ε_F,
         μ_E_max, K_E, E_min, Ea_EPS,
         κ_s_ref, κ_d_ref, Ea_MAOC_sorb, Ea_MAOC_desorb, ε_maoc,
@@ -229,39 +235,38 @@ end
 
 Construct SoilProperties with default values.
 
-Default parameters are typical for a medium-textured soil. Override via keyword arguments.
+Default parameters are for sandy loam from REFERENCE.md. Override via keyword arguments.
 
 # Keywords
 All fields can be overridden via keyword arguments.
 """
 function SoilProperties(;
-    # Van Genuchten (typical loamy soil)
-    θ_r = 0.05,
-    θ_s = 0.45,
-    α_vg = 0.01,        # [1/kPa]
-    n_vg = 1.4,
+    # Van Genuchten (sandy loam from REFERENCE.md)
+    θ_r = 0.06,
+    θ_s = 0.5,
+    α_vg = 0.1133,      # [1/kPa]
+    n_vg = 1.47,
 
     # EPS/fungi effects
     ω_E = -0.001,
     ω_F = -0.0005,
 
     # Equilibrium sorption
-    k_d_eq = 0.01,      # [mm³/μg] (FIXED: was 0.5 → retardation ~30 instead of ~1460)
-    ρ_b = 1.3e3,        # [μg/mm³] = 1.3 g/cm³ (FIXED: was 1.3e6)
+    k_d_eq = 0.05,      # [mm³/μg]
+    ρ_b = 1.5e3,        # [μg/mm³] = 1.5 g/cm³
 
     # MAOC capacity
-    M_max = 100.0,      # [μg/mm³]
-    k_L = 0.01,         # [mm³/μg]
-    n_LF = 0.8,
-    k_ma = 0.05,        # [μg-C/g-mineral]
-    f_clay_silt = 0.5,
+    M_max = 10.0,       # [μg/mm³]
+    k_L = 10.0,         # [mm³/μg]
+    n_LF = 0.7,
+    k_ma = 0.48,        # [μg-C/g-mineral]
+    f_clay_silt = 0.40,
 
     # Reference diffusion at 293.15 K
-    # Convert from literature values (cm²/s) to mm²/day: multiply by 8.64e6
-    D_C0_ref = 1.0e-5 * 8.64e6,   # DOC: ~1e-5 cm²/s → 0.864 mm²/day
-    D_O2_w_ref = 2.0e-5 * 8.64e6, # O₂ in water: ~2e-5 cm²/s → 1.728 mm²/day
-    D_O2_a_ref = 0.2 * 8.64e6,    # O₂ in air: ~0.2 cm²/s → 1728 mm²/day
-    D_B_rel = 0.001,              # Bacterial motility << DOC diffusion
+    D_C0_ref = 86.4,         # DOC: from REFERENCE.md
+    D_O2_w_ref = 173.7,      # O₂ in water: from REFERENCE.md (Han-Bartels)
+    D_O2_a_ref = 1.52e6,     # O₂ in air: from REFERENCE.md (Chapman-Enskog)
+    D_B_rel = 0.001,         # Bacterial motility << DOC diffusion
 
     # Aggregate stability
     k_F = 1.0,          # [kPa/(μg/mm³)]

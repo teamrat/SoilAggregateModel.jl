@@ -27,13 +27,15 @@ Mobile-to-immobile biomass ratio with division-by-zero protection.
 - `F_m`: Mobile fungi [μg/mm³]
 - `F_i`: Insulated fungi [μg/mm³]
 - `F_n`: Non-insulated fungi [μg/mm³]
-- `ε_F`: Regularization constant [μg/mm³] (default 1e-10)
+- `ε_F`: Regularization constant [μg/mm³] (default 1e-4)
 
 # Returns
 - Π [-] (dimensionless ratio)
 
 # Notes
 - ε_F prevents division by zero when F_i + F_n → 0
+- ε_F = 1e-4 (comparable to B_min) naturally bounds Π at physically reasonable values
+- When F_i + F_n → 0: Π → F_m/ε_F remains finite (e.g., 2e-5/1e-4 = 0.2)
 - Π appears in all transition rate expressions
 - Nonlinear mobilization (∝ Π^δ with δ > 1) provides stability
 """
@@ -48,14 +50,14 @@ end
 Fungal carbon uptake rate (gross).
 
 # Formula (manuscript Eq. 282)
-    R_F = r_F_max(T) · C_aq/(K_F + C_aq) · O_aq/(L_F + O_aq) · (F_i + λ·F_n) · exp(ν_F·ψ)
+    R_F = r_F_max(T) · C_aq/(K_F + C_aq) · O_aq/(L_F + O_aq) · (λ·F_i + F_n) · exp(ν_F·ψ)
 
 # Arguments
 - `C_aq`: Aqueous DOC concentration [μg/mm³ water]
 - `O_aq`: Aqueous oxygen concentration [μg/mm³ water]
 - `F_i`: Insulated fungi [μg/mm³]
 - `F_n`: Non-insulated fungi [μg/mm³]
-- `λ`: Fraction of F_n at active uptake surfaces [-] (λ << 1)
+- `λ`: Reduced uptake efficiency of insulated hyphae (λ ≪ 1)
 - `ψ`: Matric potential [kPa]
 - `r_F_max_T`: Max specific uptake rate at current T [1/day]
 - `K_F`: Half-saturation for carbon [μg/mm³]
@@ -67,15 +69,15 @@ Fungal carbon uptake rate (gross).
 
 # Notes
 - Uses C_aq, NOT raw C
-- Only F_i and λ·F_n contribute to uptake (F_m does not directly uptake)
-- λ << 1 reflects that most F_n hyphae are not at uptake surfaces
+- F_n (primary uptaker) and λ·F_i (insulated, reduced efficiency) contribute to uptake
+- F_m does not directly uptake (internal translocation only)
 - r_F_max_T already includes Arrhenius factor
 """
 function R_F(C_aq::Real, O_aq::Real, F_i::Real, F_n::Real, λ::Real, ψ::Real,
              r_F_max_T::Real, K_F::Real, L_F::Real, ν_F::Real)
     monod_C = C_aq / (K_F + C_aq)
     monod_O = O_aq / (L_F + O_aq)
-    uptake_biomass = F_i + λ * F_n
+    uptake_biomass = λ * F_i + F_n
     water_stress = exp(ν_F * ψ)
 
     r_F_max_T * monod_C * monod_O * uptake_biomass * water_stress
@@ -122,6 +124,36 @@ Uptake-dependent fungal yield (alternative model).
 """
 function Y_F_uptake_dependent(R_F_val::Real, Y_F_max::Real, K_YF::Real)
     Y_F_max * R_F_val / (R_F_val + K_YF)
+end
+
+"""
+    Y_F_func(Y_F_base::Real, F_i::Real, F_n::Real, F_m::Real, F_S::Real)
+
+Fungal yield with space limitation.
+
+# Formula
+    Y_F = Y_F_base · F_S / (F_total + F_S)
+
+where F_total = F_i + F_n + F_m.
+
+# Arguments
+- `Y_F_base`: Base fungal yield (without space limitation) [-]
+- `F_i`: Insulated fungi [μg/mm³]
+- `F_n`: Non-insulated fungi [μg/mm³]
+- `F_m`: Mobile fungi [μg/mm³]
+- `F_S`: Half-saturation for space limitation [μg/mm³]
+
+# Returns
+- Effective yield [-] (0 ≤ Y_F ≤ Y_F_base)
+
+# Notes
+- Space limitation: Y_F → 0 as F_total → ∞ (prevents unbounded growth)
+- At F_total = F_S: yield reduced by 50% (space-limited)
+- When F_total << F_S: Y_F ≈ Y_F_base (space-unlimited)
+"""
+function Y_F_func(Y_F_base::Real, F_i::Real, F_n::Real, F_m::Real, F_S::Real)
+    F_total = F_i + F_n + F_m
+    Y_F_base * F_S / (F_total + F_S)
 end
 
 """
@@ -206,7 +238,7 @@ end
 
 Fungal death (recycling) rate - acts only on insulated pool.
 
-# Formula (manuscript Eq. 383)
+# Formula
     R_rec_F = μ_F(T) · F_i · h_Fi
 
 # Arguments

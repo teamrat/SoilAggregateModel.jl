@@ -117,12 +117,12 @@ function R_Bb(C_B::Real, O_aq::Real, B::Real, r_B_max_T::Real, K_B::Real,
 end
 
 """
-    Y_B_func(R_diff::Real, Y_B_max::Real, K_Y::Real)
+    Y_B_func(R_diff::Real, Y_B_max::Real, K_Y::Real, B::Real, B_S::Real, ε_Y::Real)
 
-Bacterial growth yield (uptake-dependent).
+Bacterial growth yield — substrate-limited and space-limited.
 
-# Formula (manuscript Eq. 308)
-    Y_B = Y_B_max · max(0, R_diff) / [max(0, R_diff) + K_Y]
+# Formula (modified from manuscript Eq. 308)
+    Y_B = Y_B_max · softplus(R_diff, ε_Y) / [softplus(R_diff, ε_Y) + K_Y] · B_S / (B + B_S)
 
 where R_diff = R_B - R_Bb.
 
@@ -130,27 +130,31 @@ where R_diff = R_B - R_Bb.
 - `R_diff`: Excess uptake (R_B - R_Bb) [μg-C/mm³/day]
 - `Y_B_max`: Maximum yield [-]
 - `K_Y`: Half-saturation for yield response [μg-C/mm³/day]
+- `B`: Bacterial biomass [μg/mm³]
+- `B_S`: Half-saturation for space limitation [μg/mm³]
+- `ε_Y`: Softplus smoothing width [μg-C/mm³/day]
 
 # Returns
 - Effective yield [-] (0 ≤ Y_B ≤ Y_B_max)
 
 # Notes
-- Y_B = 0 when R_diff ≤ 0 (starvation, no growth)
-- Y_B → Y_B_max as R_diff → ∞ (saturated growth)
-- Half-max at R_diff = K_Y
+- Substrate limitation: Y_B → Y_B_max as R_diff → ∞ (Monod-like)
+- Space limitation: Y_B → 0 as B → ∞ (prevents unbounded growth)
+- At B = B_S: yield reduced by 50% (space-limited)
+- softplus replaces max(0, R_diff) for smooth C∞ transition at R_diff = 0
 """
-function Y_B_func(R_diff::Real, Y_B_max::Real, K_Y::Real)
-    R_diff_pos = max(0.0, R_diff)
-    Y_B_max * R_diff_pos / (R_diff_pos + K_Y)
+function Y_B_func(R_diff::Real, Y_B_max::Real, K_Y::Real, B::Real, B_S::Real, ε_Y::Real)
+    R_diff_smooth = softplus(R_diff, ε_Y)
+    Y_B_max * R_diff_smooth / (R_diff_smooth + K_Y) * B_S / (B + B_S)
 end
 
 """
-    Gamma_B(R_B_val::Real, R_Bb_val::Real, Y_B_val::Real, γ::Real)
+    Gamma_B(R_B_val::Real, R_Bb_val::Real, Y_B_val::Real, γ::Real, ε_Y::Real)
 
-Bacterial biomass growth rate.
+Bacterial biomass growth rate with smooth allocation.
 
-# Formula (manuscript Eq. 314, first line)
-    Γ_B = Y_B · max(0, R_diff) · (1 - γ) + min(0, R_diff)
+# Formula (modified from manuscript Eq. 314)
+    Γ_B = Y_B · softplus(R_diff, ε_Y) · (1 - γ) - softplus(-R_diff, ε_Y)
 
 where R_diff = R_B - R_Bb.
 
@@ -159,27 +163,29 @@ where R_diff = R_B - R_Bb.
 - `R_Bb_val`: Maintenance uptake [μg-C/mm³/day]
 - `Y_B_val`: Current yield [-]
 - `γ`: EPS allocation fraction [-]
+- `ε_Y`: Softplus smoothing width [μg-C/mm³/day]
 
 # Returns
 - Growth rate [μg-C/mm³/day]
 
 # Notes
-- When R_diff > 0: Γ_B = Y_B·R_diff·(1-γ) (growth at yield, fraction to biomass)
-- When R_diff < 0: Γ_B = R_diff < 0 (biomass catabolism to meet deficit)
+- When R_diff > 0: Γ_B ≈ Y_B·R_diff·(1-γ) (growth at yield, fraction to biomass)
+- When R_diff < 0: Γ_B ≈ R_diff < 0 (biomass catabolism to meet deficit)
+- softplus provides smooth C∞ transition at R_diff = 0
 - Fraction γ of assimilated carbon goes to EPS (see Gamma_E)
 """
-function Gamma_B(R_B_val::Real, R_Bb_val::Real, Y_B_val::Real, γ::Real)
+function Gamma_B(R_B_val::Real, R_Bb_val::Real, Y_B_val::Real, γ::Real, ε_Y::Real)
     R_diff = R_B_val - R_Bb_val
-    Y_B_val * max(0.0, R_diff) * (1.0 - γ) + min(0.0, R_diff)
+    Y_B_val * softplus(R_diff, ε_Y) * (1.0 - γ) - softplus(-R_diff, ε_Y)
 end
 
 """
-    Gamma_E(R_B_val::Real, R_Bb_val::Real, Y_B_val::Real, γ::Real)
+    Gamma_E(R_B_val::Real, R_Bb_val::Real, Y_B_val::Real, γ::Real, ε_Y::Real)
 
-Bacterial EPS production rate.
+Bacterial EPS production rate with smooth allocation.
 
-# Formula (manuscript Eq. 315)
-    Γ_E = Y_B · max(0, R_diff) · γ
+# Formula (modified from manuscript Eq. 315)
+    Γ_E = Y_B · softplus(R_diff, ε_Y) · γ
 
 where R_diff = R_B - R_Bb.
 
@@ -188,27 +194,28 @@ where R_diff = R_B - R_Bb.
 - `R_Bb_val`: Maintenance uptake [μg-C/mm³/day]
 - `Y_B_val`: Current yield [-]
 - `γ`: EPS allocation fraction [-]
+- `ε_Y`: Softplus smoothing width [μg-C/mm³/day]
 
 # Returns
 - EPS production rate [μg-C/mm³/day]
 
 # Notes
 - Only produces EPS when R_diff > 0 (excess uptake)
-- Γ_E = 0 when R_diff ≤ 0 (starvation)
-- Fraction γ of assimilated carbon (typically 0.3-0.5)
+- softplus provides smooth C∞ transition at R_diff = 0
+- Fraction γ of assimilated carbon (typically 0.2-0.5)
 """
-function Gamma_E(R_B_val::Real, R_Bb_val::Real, Y_B_val::Real, γ::Real)
+function Gamma_E(R_B_val::Real, R_Bb_val::Real, Y_B_val::Real, γ::Real, ε_Y::Real)
     R_diff = R_B_val - R_Bb_val
-    Y_B_val * max(0.0, R_diff) * γ
+    Y_B_val * softplus(R_diff, ε_Y) * γ
 end
 
 """
-    Resp_B(R_Bb_val::Real, R_diff::Real, Y_B_val::Real)
+    Resp_B(R_Bb_val::Real, R_diff::Real, Y_B_val::Real, ε_Y::Real)
 
-Bacterial respiration rate.
+Bacterial respiration rate with smooth allocation.
 
-# Formula (manuscript Eq. 321)
-    Resp_B = R_Bb + max(0, R_diff) · (1 - Y_B)
+# Formula (modified from manuscript Eq. 321)
+    Resp_B = R_Bb + softplus(R_diff, ε_Y) · (1 - Y_B)
 
 where R_diff = R_B - R_Bb.
 
@@ -216,6 +223,7 @@ where R_diff = R_B - R_Bb.
 - `R_Bb_val`: Maintenance uptake [μg-C/mm³/day]
 - `R_diff`: Excess uptake (R_B - R_Bb) [μg-C/mm³/day]
 - `Y_B_val`: Current yield [-]
+- `ε_Y`: Softplus smoothing width [μg-C/mm³/day]
 
 # Returns
 - Respiration rate (CO₂ production) [μg-C/mm³/day]
@@ -223,11 +231,11 @@ where R_diff = R_B - R_Bb.
 # Notes
 - Maintenance (R_Bb) is fully respired
 - Growth uptake: fraction (1 - Y_B) respired, fraction Y_B assimilated
-- When R_diff < 0: respiration = R_Bb (deficit met by biomass, not respiration)
+- softplus provides smooth C∞ transition at R_diff = 0
 - Contributes to S_O: O₂ consumption = α_O · Resp_B
 """
-function Resp_B(R_Bb_val::Real, R_diff::Real, Y_B_val::Real)
-    R_Bb_val + max(0.0, R_diff) * (1.0 - Y_B_val)
+function Resp_B(R_Bb_val::Real, R_diff::Real, Y_B_val::Real, ε_Y::Real)
+    R_Bb_val + softplus(R_diff, ε_Y) * (1.0 - Y_B_val)
 end
 
 """
@@ -235,7 +243,7 @@ end
 
 Bacterial death (recycling) rate.
 
-# Formula (manuscript Eq. 375)
+# Formula
     R_rec_B = μ_B(T) · B · h_B
 
 # Arguments
