@@ -4,12 +4,26 @@
 """
     compute_r_agg(record::OutputRecord, grid::GridInfo, params::ParameterSet)
 
-Stable aggregate radius [mm] from manuscript Section 2.4.7 (Eq. in line 753).
+Stable aggregate radius [mm] from oscillatory wall shear stress criterion.
 
-Scans outward from r_0. The stable radius is the largest r where:
-    (F_i(r) + ½·E(r)) · (r + χ·a_p) ≥ G_c
+The aggregate is the region where biologically produced binding agents
+generate sufficient cohesive strength to resist hydrodynamic disaggregation
+during wet sieving. The criterion compares the local cohesive strength
+τ_c(r) = k_F·F_i(r) + k_E·E(r) against the wall shear stress τ_w
+from the oscillatory Stokes boundary layer (Batchelor, 1967, §4.3, §5.14).
 
-where G_c = 3μv / (2k_F) is the critical binding strength threshold.
+Dividing through by k_F with k_E = k_F/2:
+
+    F_i(r) + ½·E(r) ≥ G_c = √2·μ·v_s / (k_F·δ_s)
+
+where:
+- μ: dynamic viscosity of water [Pa·s]
+- v_s = π·f_s·L_s: maximum sieving velocity [mm/s]
+- δ_s = √(2·ν_w/Ω): Stokes boundary layer thickness [mm]
+- Ω = 2π·f_s: angular frequency [rad/s]
+- k_F: specific binding strength [Pa/(μg/mm³)]
+
+G_c is a concentration threshold [μg/mm³] independent of position r.
 
 # Arguments
 - `record::OutputRecord`: State snapshot at a specific time
@@ -18,78 +32,65 @@ where G_c = 3μv / (2k_F) is the critical binding strength threshold.
 
 # Returns
 - `r_agg::Float64`: Stable aggregate radius [mm]
-  - Returns 0.0 if criterion is not met at any node (including r_0)
+  - Returns 0.0 if criterion is not met at any node
   - Returns r_grid[i] of the outermost node satisfying the criterion
 
-# Physical basis
-From Stokes drag force balance during wet sieving:
-- Hydrodynamic stress must not exceed binding strength
-- Binding strength = (F_i + 0.5·E) × effective radius
-- Effective radius r_eff = r + χ·a_p accounts for particle adhesion
-- G_c threshold from sieving velocity v = π·f·L
+# Notes
+- Scans ALL nodes and takes the outermost passing one (no early break),
+  because binding agent profiles can be non-monotonic.
+- The flat-wall approximation is accurate for aggregates with diameter > ~3 mm
+  (δ_s ≈ 0.75 mm). For smaller aggregates, curvature effects cause the model
+  to overestimate stability. This bias is partially absorbed into calibrated k_F.
 
-# Units
-- μ: dynamic viscosity [Pa·s = kg/(m·s)]
-- v: sieving velocity [mm/s]
-- k_F: specific binding strength [kPa/(μg/mm³)]
-- G_c: [Pa·mm] = [kg/s²] = [kg·mm/s²]
-- All consistent with model's μg/mm³/days unit system
-
-# Manuscript reference
-Section 2.4.7, Aggregate Stability Mechanics
+# References
+- Batchelor, G. K. (1967). An Introduction to Fluid Dynamics. Cambridge
+  University Press. §4.3 (oscillating plate solution), §5.14 (extension to
+  oscillating rigid bodies).
 """
 function compute_r_agg(record::OutputRecord, grid::GridInfo, params::ParameterSet)
-    # Sieve shaker parameters (standard wet sieving)
-    L = 30.0        # stroke length [mm]
-    f = 50.0 / 60.0  # frequency [Hz] = [1/s] (50 oscillations/min)
-    μ = 1.002e-3     # dynamic viscosity of water at 20°C [Pa·s = kg/(m·s)]
+    # Standard wet sieving parameters (Eijkelkamp apparatus)
+    L_s = 13.0          # stroke length [mm]
+    f_s = 34.0 / 60.0   # frequency [Hz] (34 oscillations/min)
+    μ = 1.002e-3         # dynamic viscosity of water at 20°C [Pa·s]
+    ν_w = 1.004          # kinematic viscosity of water at 20°C [mm²/s] = 1.004e-6 m²/s
 
     # Maximum sieving velocity [mm/s]
-    v = π * f * L  # ≈ 78.5 mm/s
+    v_s = π * f_s * L_s  # ≈ 23.1 mm/s
 
-    # Soil parameters
-    k_F = params.soil.k_F      # [kPa/(μg/mm³)]
-    χ = params.soil.χ          # [mm]
-    a_p = params.soil.a_p      # [mm]
+    # Angular frequency [rad/s]
+    Ω = 2π * f_s  # ≈ 3.56 rad/s
 
-    # Critical binding strength G_c
-    # Units check:
-    # LHS of criterion: (F_i + 0.5·E) × r_eff = [μg/mm³] × [mm] = [μg/mm²]
-    # So G_c must have units [μg/mm²]
+    # Stokes boundary layer thickness [mm]
+    δ_s = sqrt(2.0 * ν_w / Ω)  # ≈ 0.75 mm
+
+    # Wall shear stress [Pa] — peak amplitude from exact flat-plate solution
+    # τ_w = √2 · μ · v_s / δ_s
+    # (the √2 arises from the phase difference between velocity and stress
+    #  at the wall in the oscillatory Stokes solution; Batchelor §4.3)
     #
-    # G_c = 3μv/(2k_F)
-    # μ: [Pa·s] = [kg/(m·s)]
-    # v: [mm/s]
-    # k_F: [kPa/(μg/mm³)] = [1000 Pa/(μg/mm³)]
-    #
-    # G_c = 3 × [kg/(m·s)] × [mm/s] / (2 × 1000 [Pa/(μg/mm³)])
-    #     = 3μv / (2000 k_F) × [(kg·mm/m)/s²] / [(kg/(m·s²))/(μg/mm³)]
-    #     = 3μv / (2000 k_F) × [μg/mm²]
-    #
-    # So: G_c = 3μv / (2000 k_F) where k_F is in kPa units
-    G_c = (3.0 * μ * v) / (2000.0 * k_F)  # [μg/mm²]
+    # NOTE: v_s is in mm/s but μ is in Pa·s = kg/(m·s).
+    # Convert v_s to m/s and δ_s to m for consistent Pa units:
+    τ_w = sqrt(2.0) * μ * (v_s * 1e-3) / (δ_s * 1e-3)  # [Pa]
+
+    # Specific binding strength [Pa/(μg/mm³)]
+    k_F = params.soil.k_F
+
+    # Critical threshold [μg/mm³]
+    G_c = τ_w / k_F
 
     # State variables
     F_i = record.state.F_i
     E = record.state.E
-    r = grid.r_grid
 
-    # Scan outward from r_0 to find outermost node satisfying criterion
+    # Compute binding concentration at all nodes
+    binding = F_i .+ 0.5 .* E
+
+    # Find outermost node where binding >= G_c
     r_agg = 0.0
-
-    for i in 1:grid.n
-        # Effective radius
-        r_eff = r[i] + χ * a_p
-
-        # Binding strength
-        binding_strength = (F_i[i] + 0.5 * E[i]) * r_eff
-
-        # Check criterion
-        if binding_strength >= G_c
-            r_agg = r[i]
-        else
-            # Once criterion fails, stop (monotonic scan)
-            break
+    for i in grid.n:-1:1  # scan from outer to inner
+        if binding[i] >= G_c
+            r_agg = grid.r_grid[i]
+            break  # found the outermost, done
         end
     end
 

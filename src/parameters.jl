@@ -45,6 +45,8 @@ struct BiologicalProperties
     Y_F::Float64            # Base growth yield [-]
     μ_F::Float64            # Mortality rate at T_ref [1/day]
     F_i_min::Float64        # Minimum viable insulated biomass [μg/mm³]
+    F_n_min::Float64        # Minimum viable insulated biomass [μg/mm³]
+    F_m_min::Float64        # Minimum viable insulated biomass [μg/mm³]
     F_S::Float64            # Half-saturation for space limitation on fungal yield (total F_i+F_n+F_m) [μg/mm³]
     Ea_F::Float64           # Activation energy [J/mol] — shared by ALL fungal rates
 
@@ -60,6 +62,7 @@ struct BiologicalProperties
     D_Fn0::Float64          # Hyphal extension diffusivity at T_ref [mm²/day]
     D_Fm0::Float64          # Internal translocation rate at T_ref [mm²/day]
     ε_F::Float64            # Π denominator protection [μg/mm³]
+    K_Fm_net::Float64    # Half-saturation for network-dependent F_m translocation [μg/mm³]
 
     # --- EPS ---
     μ_E_max::Float64        # Max EPS degradation rate at T_ref [1/day]
@@ -126,22 +129,30 @@ function BiologicalProperties(;
     ν_F = 7.58e-5,
     Y_F = 0.6,
     μ_F = 0.012,
-    F_i_min = 1.0e-4,
+    F_i_min = 1.0e-6,
+    F_n_min = 1.0e-4,
+    F_m_min = 1.0e-6,
     F_S = 0.2,          # [μg/mm³] = 0.2 kg/m³, half-saturation for space limitation (total fungi)
     Ea_F = 55_000.0,
 
     # Fungal transitions (from REFERENCE.md)
-    α_i = 0.1,
-    α_n = 0.15,
-    β_i = 0.0,
-    β_n = 0.15,         # was 0.0. Immobilization rate, non-insulated [1/day]
-    delta = 2.0,
+    α_i = 0.0,      # no mobilization (MATLAB: beta_i = 0)
+    α_n = 0.0,      # no mobilization (MATLAB: beta_n = 0)
+    β_i = 0.1,      # immobilization to insulated (MATLAB: alpha_i = 0.1)
+    β_n = 0.15,     # immobilization to non-insulated (MATLAB: alpha_n = 0.15)
+    delta = 1.0,    # linear (MATLAB: delta = 1)
+    #α_i = 0.1,
+    #α_n = 0.15,
+    #β_i = 0.0,
+    #β_n = 0.15,         # was 0.0. Immobilization rate, non-insulated [1/day]
+    #delta = 2.0,
     η_conv = 0.8,
     ζ = 0.2,
     λ = 0.05,
     D_Fn0 = 0.01,
     D_Fm0 = 1.0,
     ε_F = 1e-4,
+    K_Fm_net = 20.0 * 1e-4,   # 2e-3; MATLAB: 10*(Fi_min + Fn_min)    
 
     # EPS (from REFERENCE.md)
     μ_E_max = 0.002,
@@ -175,8 +186,8 @@ function BiologicalProperties(;
 )
     BiologicalProperties(
         r_B_max, K_B, L_B, ν_B, Y_B_max, K_Y, ε_Y, γ, C_B, μ_B, B_min, B_S, Ea_B,
-        r_F_max, K_F, L_F, ν_F, Y_F, μ_F, F_i_min, F_S, Ea_F,
-        α_i, α_n, β_i, β_n, delta, η_conv, ζ, λ, D_Fn0, D_Fm0, ε_F,
+        r_F_max, K_F, L_F, ν_F, Y_F, μ_F, F_i_min,F_n_min,F_m_min, F_S, Ea_F,
+        α_i, α_n, β_i, β_n, delta, η_conv, ζ, λ, D_Fn0, D_Fm0, ε_F, K_Fm_net,
         μ_E_max, K_E, E_min, Ea_EPS,
         κ_s_ref, κ_d_ref, Ea_MAOC_sorb, Ea_MAOC_desorb, ε_maoc,
         R_P_max, P_0, r_0, θ_P, L_P, K_B_P, K_F_P, ρ_POM, Ea_POM,
@@ -225,8 +236,8 @@ struct SoilProperties
     D_B_rel::Float64        # Bacterial motility relative to D_C [-]
 
     # Aggregate stability
-    k_F::Float64            # Specific binding strength [kPa/(μg/mm³)]
-    χ::Float64              # Particle adhesion length scale [mm]
+    k_F::Float64            # Specific binding strength [Pa/(μg/mm³)]
+    χ::Float64              # [UNUSED] Was particle adhesion length; no longer in stability criterion
     a_p::Float64            # Particle radius [mm]
 end
 
@@ -269,8 +280,8 @@ function SoilProperties(;
     D_B_rel = 0.001,         # Bacterial motility << DOC diffusion
 
     # Aggregate stability
-    k_F = 1.0,          # [kPa/(μg/mm³)]
-    χ = 0.001,          # [mm]
+    k_F = 2.25,         # [Pa/(μg/mm³)] — scaling: σ_h·d_p/(4·ρ_h) ≈ 30e6·30e-6/(4·100)
+    χ = 0.001,          # [mm] [UNUSED] — retained for struct compatibility
     a_p = 0.01          # [mm]
 )
     SoilProperties(
