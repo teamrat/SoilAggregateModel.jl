@@ -135,6 +135,47 @@ softplus(x, ε) = { x + ε·ln(1 + exp(-x/ε))   if x > 0
 
 ---
 
+## 9. Conservation Bug Fix: Clipping Carbon Accounting
+
+**Bug**: Non-negativity clipping used `abs()` when redirecting negative mass to CO₂, creating carbon
+**Original (buggy)**:
+```julia
+if state.C[i] < 0.0
+    clip_carbon += abs(state.C[i]) * volume_i  # BUG: creates carbon!
+    state.C[i] = 0.0
+end
+```
+
+**Fixed**:
+```julia
+if state.C[i] < 0.0
+    clip_carbon += state.C[i] * volume_i  # Negative value decreases CO₂
+    state.C[i] = 0.0
+end
+```
+
+**Rationale**: When a pool becomes negative after Forward Euler update:
+- Setting the pool to zero removes the negative value (gains carbon)
+- Adding `abs()` to CO₂ adds positive carbon (gains carbon again)
+- Result: **double-counting creates 2× the negative value as new carbon**
+
+Correct accounting: Add the negative value directly to CO₂ (effectively subtracting from CO₂) to balance the removal of negative mass.
+
+**Impact**:
+- Before fix: 0.7% error over 365 days (fixed dt=0.001)
+- After fix: 10⁻¹⁴% error (machine precision)
+- **Improvement: ~10¹³ times**
+
+**Location**: `src/solver/reaction_step.jl`
+- Lines 103, 107, 111, 115, 119, 123, 127 (7 carbon pools)
+- Line 145 (POM scalar)
+
+**Discovery**: Systematic conservation testing revealed leak appeared only at high biomass (day 60+) when clipping events became frequent. Conservation identity testing proved algebraic formulas were correct, isolating the bug to clipping accounting.
+
+**Status**: Fixed
+
+---
+
 ## Summary of Active Deviations
 
 | Change | Type | Impact | Status |
@@ -147,6 +188,7 @@ softplus(x, ε) = { x + ε·ln(1 + exp(-x/ε))   if x > 0
 | ε_F = 1e-4 | Numerical stability | Critical | Implemented |
 | K_B_P, K_F_P = 1e-3 | New parameters | Medium | Implemented |
 | Parameter restoration | Corrections | Critical | Complete |
+| Clipping conservation fix | Bug fix | Critical | Fixed |
 
 ---
 
@@ -162,6 +204,7 @@ softplus(x, ε) = { x + ε·ln(1 + exp(-x/ε))   if x > 0
 
 ### Solver
 - `src/solver/reactions.jl`: Updated all call sites for modified functions
+- `src/solver/reaction_step.jl`: Fixed clipping carbon accounting (removed `abs()` from 8 locations)
 - `src/postprocessing/derived.jl`: Updated respiration and CUE calculations
 
 ### Utilities
@@ -176,11 +219,15 @@ softplus(x, ε) = { x + ε·ln(1 + exp(-x/ε))   if x > 0
 
 ## Testing Status
 
-- **Unit tests**: Many failures expected due to parameter changes (not yet updated)
-- **Physics test (Theme 1)**: Ready to run with all changes integrated
-- **Conservation**: Expected to hold to machine precision with softplus smoothing
+- **Unit tests**: 1289 passed, 6 failed, 3 errored (failures are pre-existing, unrelated to conservation fix)
+- **Physics test (Theme 1)**: Complete with all changes integrated
+- **Conservation**:
+  - **Fixed dt=0.001, 365 days**: -1.13×10⁻¹⁴% error (machine precision)
+  - **Adaptive timestepper, 365 days**: 0.0% error (machine precision)
+  - **High-biomass Strang test**: Max 1.09×10⁻¹² μg-C residual per step
+  - **Improvement from bug fix**: ~10¹³ times better**
 
 ---
 
-_Last updated: 2026-02-08_
+_Last updated: 2026-02-09_
 _Implementation: SoilAggregateModel.jl v0.1.0_

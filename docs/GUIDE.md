@@ -110,9 +110,9 @@ Water stress uses **positive ν_B** with **negative ψ**: exp(ν_B · ψ) < 1 in
 
 ### Fungi
 
-Fungal uptake uses the same dual-Monod form but only (F_i + λ·F_n) contributes to uptake (not F_m):
+Fungal uptake uses the same dual-Monod form but only (λ·F_i + F_n) contributes to uptake (not F_m):
 
-$$R_F = r_{F,\max}(T) \cdot \frac{C_{aq}}{K_F + C_{aq}} \cdot \frac{O_{aq}}{L_F + O_{aq}} \cdot (F_i + \lambda \, F_n) \cdot \exp(\nu_F \, \psi)$$
+$$R_F = r_{F,\max}(T) \cdot \frac{C_{aq}}{K_F + C_{aq}} \cdot \frac{O_{aq}}{L_F + O_{aq}} \cdot (\lambda \, F_i + F_n) \cdot \exp(\nu_F \, \psi)$$
 
 All assimilated carbon Γ_F = Y_F·R_F enters F_m (the translocation network), then redistributes to F_i and F_n via transitions. Only F_i dies; F_n converts to F_i via insulation. This three-compartment architecture is detailed in §5.
 

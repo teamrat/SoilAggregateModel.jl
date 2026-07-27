@@ -1,8 +1,8 @@
 # Soil Aggregate Model — Reference Manual
 
-**Last Updated**: 2026-02-06  
-**Authoritative source for physics**: `manuscript_updated.tex`  
-**Authoritative source for solver design**: `ARCHITECTURE_CLAUDE_CODE.md`  
+**Last Updated**: 2026-02-09
+**Authoritative source for physics**: `manuscript_updated.tex`
+**Authoritative source for solver design**: `ARCHITECTURE_CLAUDE_CODE.md`
 **Units throughout**: μg/mm³ (= kg/m³), mm, days, kPa, K, J/mol
 
 ---
@@ -30,11 +30,20 @@
 ### Part III: Function Catalog
 15. [By Module](#15-function-catalog-by-module)
 
-### Part IV: Conventions
-16. [Units](#16-units)
-17. [Sign Conventions](#17-sign-conventions)
-18. [Naming Conventions](#18-naming-conventions)
-19. [Errata and Corrections](#19-errata-and-corrections)
+### Part IV: Computational Methods
+16. [Softplus Regularization](#16-softplus-regularization)
+17. [Non-Negativity Clipping and CO₂ Correction](#17-non-negativity-clipping-and-co2-correction)
+18. [Conservation Weights and Spherical Laplacian](#18-conservation-weights-and-spherical-laplacian)
+19. [Strang Splitting and POM-Diffusion Coupling](#19-strang-splitting-and-pom-diffusion-coupling)
+20. [Adaptive Timestepping](#20-adaptive-timestepping)
+21. [Sigmoid Threshold Functions](#21-sigmoid-threshold-functions)
+22. [Space-Limited Yield](#22-space-limited-yield)
+
+### Part V: Conventions
+23. [Units](#23-units)
+24. [Sign Conventions](#24-sign-conventions)
+25. [Naming Conventions](#25-naming-conventions)
+26. [Errata and Corrections](#26-errata-and-corrections)
 
 ---
 
@@ -123,12 +132,12 @@ Temperature dependence:
 | δ | `delta` | 2.0 | — | Mobilization exponent (must be > 1) |
 | η | `η_conv` | 0.8 | — | Conversion efficiency; (1−η) lost to respiration |
 | ζ | `ζ` | 0.2 | day⁻¹ | Insulation rate (F_n → F_i) |
-| λ | `λ` | 0.05 | — | Fraction of F_n at uptake surfaces (λ ≪ 1) |
+| λ | `λ` | 0.05 | — | Reduced uptake fraction for insulated hyphae (λ ≪ 1) |
 | D_Fn0 | `D_Fn0` | — | mm²/day | Hyphal extension diffusivity at T_ref |
 | D_Fm0 | `D_Fm0` | 1.0 | mm²/day | Translocation rate at T_ref (no tortuosity) |
 | ε_F | `ε_F` | 1e-10 | μg/mm³ | Π denominator protection |
 
-Fungal uptake: only (F_i + λ·F_n) contributes. All Γ_F enters F_m. Only F_i dies.
+Fungal uptake: only (λ·F_i + F_n) contributes. All Γ_F enters F_m. Only F_i dies.
 
 ### 3.4 EPS
 
@@ -272,7 +281,7 @@ $$R_{B,b} = r_{B,\max}(T) \cdot \frac{C_B}{K_B + C_B} \cdot \frac{O_{aq}}{L_B + 
 Growth vs starvation: if R_B > R_Bb (growth regime), then Γ_B = Y_B · R_B · (1−γ), Γ_E = Y_B · R_B · γ. If R_B ≤ R_Bb (starvation), Γ_B = R_B, Γ_E = 0.
 
 **Fungal uptake** (per node):
-$$R_F = r_{F,\max}(T) \cdot \frac{C_{aq}}{K_F + C_{aq}} \cdot \frac{O_{aq}}{L_F + O_{aq}} \cdot (F_i + \lambda \, F_n) \cdot \exp(\nu_F \, \psi)$$
+$$R_F = r_{F,\max}(T) \cdot \frac{C_{aq}}{K_F + C_{aq}} \cdot \frac{O_{aq}}{L_F + O_{aq}} \cdot (\lambda \, F_i + F_n) \cdot \exp(\nu_F \, \psi)$$
 
 All Γ_F = Y_F · R_F enters F_m.
 
@@ -487,9 +496,220 @@ S_O  = −α_O·(Resp_B + Resp_F + Resp_F^conv)     (+ diffusion)
 
 ---
 
-# Part IV: Conventions
+# Part IV: Computational Methods
 
-## 16. Units
+This section documents numerical techniques used in the implementation that depart from, extend, or supplement the manuscript equations. These are not approximations introduced for convenience — each addresses a specific mathematical or physical requirement (smoothness, positivity, conservation) and has been verified to preserve the model's conservation identity to machine precision.
+
+---
+
+## 16. Softplus Regularization
+
+**Problem.** The manuscript uses piecewise-linear operations — $\max(0, x)$ and $\min(0, x)$ — to switch between growth and starvation regimes in the bacterial allocation equations. These have discontinuous derivatives at $x = 0$, which introduces stiffness: the ODE system's Jacobian jumps, forcing the adaptive timestepper to take unnecessarily small steps near the transition.
+
+**Solution.** Replace $\max(0, x)$ with the softplus function and $\min(0, x)$ with its complement:
+
+$$
+\varphi_\varepsilon(x) = \varepsilon \ln\!\bigl(1 + e^{x/\varepsilon}\bigr)
+$$
+
+implemented in numerically stable form:
+
+$$
+\varphi_\varepsilon(x) = \begin{cases}
+x + \varepsilon \ln(1 + e^{-x/\varepsilon}) & x > 0 \\[4pt]
+\varepsilon \ln(1 + e^{x/\varepsilon}) & x \leq 0
+\end{cases}
+$$
+
+The key substitutions are:
+
+| Manuscript | Implementation |
+|------------|----------------|
+| $\max(0, R_{\text{diff}})$ | $\varphi_\varepsilon(R_{\text{diff}})$ |
+| $\min(0, R_{\text{diff}})$ | $-\varphi_\varepsilon(-R_{\text{diff}})$ |
+
+where $R_{\text{diff}} = R_B - R_{B,b}$ (uptake minus maintenance).
+
+**Conservation identity.** The softplus satisfies the exact algebraic identity:
+
+$$
+\varphi_\varepsilon(x) - \varphi_\varepsilon(-x) = x
+$$
+
+for all $x$ and $\varepsilon > 0$. This is not a numerical approximation — it holds to machine precision because:
+
+$$
+\varepsilon\ln(1+e^{x/\varepsilon}) - \varepsilon\ln(1+e^{-x/\varepsilon}) = \varepsilon\ln\frac{1+e^{x/\varepsilon}}{1+e^{-x/\varepsilon}} = \varepsilon \cdot \frac{x}{\varepsilon} = x
+$$
+
+As a consequence, the bacterial carbon balance
+
+$$
+\Gamma_B + \Gamma_E + \text{Resp}_B = R_B
+$$
+
+is preserved exactly under softplus substitution, because all allocation terms decompose into $\varphi_\varepsilon(R_{\text{diff}})$ and $\varphi_\varepsilon(-R_{\text{diff}})$ whose sum telescopes to $R_{\text{diff}}$.
+
+**Where used.** Bacterial allocation ($\Gamma_B$, $\Gamma_E$, $\text{Resp}_B$), yield function ($Y_B$), and MAOC sorption/desorption switching ($J_M$). The smoothing width $\varepsilon_Y = K_Y / 100$ is small enough that the softplus is indistinguishable from $\max(0, \cdot)$ outside a narrow transition zone of width $\sim 3\varepsilon$.
+
+---
+
+## 17. Non-Negativity Clipping and CO₂ Correction
+
+**Problem.** Forward Euler can overshoot, driving a pool negative when the consumption rate exceeds the available substrate within one timestep. Negative concentrations are unphysical and, if left uncorrected, contaminate subsequent source-term evaluations.
+
+**Solution.** After each Forward Euler update, negative pools are clipped to zero. The critical subtlety is in the CO₂ bookkeeping.
+
+**The accounting logic.** Consider a node where the Forward Euler update produces $C^{n+1} = C^n + \Delta t \cdot S_C < 0$. The source terms satisfy the conservation identity:
+
+$$
+\sum_X S_X + \text{Resp}_{\text{total}} = 0
+$$
+
+so the CO₂ accumulation line $\text{CO}_2 \mathrel{+}= \Delta t \cdot \text{Resp}_{\text{total}} \cdot V_i$ already accounts for all carbon leaving the pools. The conservation identity holds exactly after the Euler update — total carbon (pools + CO₂) is unchanged.
+
+Now clipping sets $C$ from a negative value to zero, increasing the pool's carbon content by $|C^{n+1}| \cdot V_i$. To maintain conservation, CO₂ must decrease by the same amount:
+
+```julia
+if state.C[i] < 0.0
+    clip_carbon += state.C[i] * volume_i   # negative value → reduces CO₂
+    state.C[i] = 0.0
+end
+...
+state.CO2_cumulative += dt * Resp_total * volume_i + clip_carbon
+```
+
+Note that `clip_carbon` carries the **signed** (negative) value of the clipped pool times volume. This subtracts from CO₂, exactly compensating the carbon "created" by zeroing the negative pool.
+
+**Physical interpretation.** Forward Euler over-estimated respiration because it assumed constant rates throughout the step. In reality, as the substrate approached zero, consumption would have slowed. The CO₂ correction removes the excess respiration that could not have physically occurred — it is not a fudge but the correct mass balance adjustment for an explicit integrator that overshoots.
+
+**The original bug (diagnosed February 2026).** The initial implementation used `abs(state.C[i])` instead of `state.C[i]`, which added a positive value to CO₂ rather than subtracting. This doubled the clipped carbon: the pool gained $|C^{n+1}| \cdot V_i$ (from negative to zero) and CO₂ also gained $|C^{n+1}| \cdot V_i$, creating $2|C^{n+1}| \cdot V_i$ of carbon from nothing. The bug produced a conservation error of approximately 0.014%/year under adaptive timestepping (0.7%/year under fixed $\Delta t = 0.001$ d), was invisible at low biomass (no clipping events), and was masked by the adaptive stepper's tendency to take small steps that minimized overshoot. It was isolated through systematic elimination of all other conservation pathways (diffusion, source-term identity, POM coupling) and confirmed by tracing per-step carbon budgets at high biomass density.
+
+---
+
+## 18. Conservation Weights and Spherical Laplacian
+
+**Problem.** In spherical geometry, the natural cell volume for node $i$ is the shell $(4\pi/3)(r_{i+1/2}^3 - r_{i-1/2}^3)$. However, using geometrically exact shell volumes for discrete integration does not produce exact conservation with the Crank–Nicolson stencil, because the ratio $V_i / (r_i^2 h^2)$ varies across nodes.
+
+**Solution.** The conservation weights are chosen to match the discrete Laplacian stencil:
+
+$$
+W_i = 4\pi \, r_i^2 \, h
+$$
+
+These are **not** the true shell volumes — they are the weights that make the discrete conservation identity hold exactly. The spherical Laplacian stencil at node $i$ is:
+
+$$
+L_i = \frac{1}{r_i^2 h^2}\Bigl[r_{i+1/2}^2 D_{i+1/2}(u_{i+1} - u_i) - r_{i-1/2}^2 D_{i-1/2}(u_i - u_{i-1})\Bigr]
+$$
+
+Multiplying by $W_i = 4\pi r_i^2 h$ gives:
+
+$$
+W_i \cdot L_i = \frac{4\pi}{h}\Bigl[r_{i+1/2}^2 D_{i+1/2}(u_{i+1} - u_i) - r_{i-1/2}^2 D_{i-1/2}(u_i - u_{i-1})\Bigr]
+$$
+
+Summing over all nodes, each interior flux appears once with $+$ and once with $-$, producing exact telescoping:
+
+$$
+\sum_i W_i \cdot L_i = \frac{4\pi}{h}\bigl[\text{outer boundary flux} - \text{inner boundary flux}\bigr]
+$$
+
+This guarantees that diffusion conserves mass exactly (to machine precision) when integrated with weights $W_i$. The same weights must be used everywhere: in `compute_total_carbon`, in the CO₂ accumulation (`volume_i`), and in post-processing integrals.
+
+**Implementation note.** The weights are precomputed in `GridInfo` and stored as `grid.W`. A separate `compute_cell_volumes` function exists for geometrically exact shell volumes (used only for visualization and post-processing, never for conservation accounting).
+
+---
+
+## 19. Strang Splitting and POM-Diffusion Coupling
+
+**Architecture.** Each timestep applies second-order Strang splitting:
+
+1. Diffusion half-step ($\Delta t / 2$): Crank–Nicolson for $C$, $B$, $F_n$, $F_m$, $O$
+2. Reaction full-step ($\Delta t$): Forward Euler for all pools + POM scalar + CO₂
+3. Diffusion half-step ($\Delta t / 2$): identical to step 1
+
+This decouples transport (tridiagonal, $O(n)$ per species) from reactions (pointwise, $O(n)$), avoiding a monolithic $8n+1$ implicit system.
+
+**POM dissolution coupling.** POM dissolution creates a flux $J_P$ at the inner boundary that enters the dissolved carbon pool $C$ via the Neumann boundary condition. The same dissolution rate decreases the POM scalar in the reaction step. To ensure exact mass balance:
+
+- $J_P$ is computed **once** at the beginning of each timestep from the current state
+- The **same** $J_P$ is used for both diffusion half-steps (as a Neumann BC) and for the POM decrease ($P \mathrel{-}= \Delta t \cdot R_P$ where $R_P = J_P \cdot 4\pi r_0^2$)
+- Carbon entering $C$ through the boundary = $J_P \cdot 4\pi r_0^2 \cdot \Delta t$ (summed over both half-steps)
+- Carbon leaving $P$ = $R_P \cdot \Delta t = J_P \cdot 4\pi r_0^2 \cdot \Delta t$
+- These are identical by construction, regardless of whether $J_P$ is "stale" relative to the post-reaction state
+
+Freezing $J_P$ does introduce a splitting error (the solution trajectory differs from the unsplit system), but it does **not** introduce a conservation error. The splitting error is $O(\Delta t^2)$, consistent with Strang splitting.
+
+---
+
+## 20. Adaptive Timestepping
+
+**Criterion.** After each reaction step, the maximum relative change across all nodes and species is computed:
+
+$$
+\rho = \max_{i, X} \frac{|S_X \cdot \Delta t|}{\max(u_X^{(i)},\, \tau)}
+$$
+
+where $\tau = 10^{-6}$ prevents division by near-zero values.
+
+**Adjustment.**
+
+| Condition | Action |
+|-----------|--------|
+| $\rho > 0.10$ | Halve $\Delta t$ |
+| $\rho < 0.01$ | Double $\Delta t$ |
+| otherwise | Keep $\Delta t$ |
+
+Bounds: $\Delta t_{\min} = 10^{-4}$ d, $\Delta t_{\max} = 0.1$ d.
+
+**Note on conservation.** The adaptive stepper does **not** reject and re-do steps. When $\rho$ exceeds the threshold, the current step is accepted and the next step uses the reduced $\Delta t$. This is a "predict then correct" strategy: the occasional large-$\rho$ step introduces $O(\Delta t)$ trajectory error but does not break conservation (the per-step conservation identity holds for any $\Delta t$). In practice, the stepper maintains $\rho \approx 0.01\text{–}0.10$, corresponding to 1–10% relative change per step.
+
+**Interaction with clipping.** Smaller $\Delta t$ means less overshoot, fewer clipping events, and better trajectory accuracy. This is why the adaptive stepper produced 50$\times$ better conservation (0.014%/year) than fixed $\Delta t = 0.001$ (0.7%/year) before the clipping bug was fixed — the adaptive stepper was taking smaller steps in regions of stiff dynamics, reducing the number of clipping corrections needed.
+
+---
+
+## 21. Sigmoid Threshold Functions
+
+**Problem.** Biological rates (mortality, maintenance, insulation) should vanish smoothly as biomass approaches a minimum viable threshold, not discontinuously.
+
+**Solution.** Three sigmoid functions enforce soft lower bounds:
+
+$$
+h(x) = \frac{\exp(\beta\, x)}{\exp(\beta\, x) + \exp(\beta\, x_{\min})}
+$$
+
+with $\beta = 50 / x_{\min}$, giving a smooth transition from 0 to 1 over a width of approximately $4 x_{\min} / 50$. Applied to:
+
+| Function | Variable | Threshold | Effect |
+|----------|----------|-----------|--------|
+| $h_B(B)$ | Bacteria | $B_{\min}$ | Shuts off maintenance $R_{B,b}$ and mortality near extinction |
+| $h_{F_i}(F_i)$ | Insulated fungi | $F_{i,\min}$ | Shuts off fungal mortality near extinction |
+| $h_E(E)$ | EPS | $E_{\min}$ | Shuts off EPS recycling near depletion |
+
+These prevent numerical extinction artifacts where a pool oscillates around zero due to competing production and consumption terms. The sigmoid ensures a smooth, monotonic approach to zero rather than oscillatory overshoot.
+
+---
+
+## 22. Space-Limited Yield
+
+**Problem.** Without a carrying capacity mechanism, bacterial biomass grows exponentially until substrate is exhausted, producing unrealistic densities ($> 6$ $\mu$g/mm$^3$, equivalent to $> 6$ kg/m$^3$ bacterial carbon).
+
+**Solution.** Growth yield decreases with local biomass density via a Monod-form space limitation factor:
+
+$$
+Y_B = Y_{B,\max} \cdot \frac{\varphi_\varepsilon(R_{\text{diff}})}{\varphi_\varepsilon(R_{\text{diff}}) + K_Y} \cdot \frac{B_S}{B + B_S}
+$$
+
+At $B \gg B_S$, yield approaches zero and all uptake is respired as maintenance. This produces an emergent carrying capacity that depends on local substrate and oxygen availability, rather than a hard cap. The analogous fungal form uses total fungal biomass $F_i + F_n + F_m$ with half-saturation $F_S$.
+
+**Conservation.** Because reduced yield routes carbon to respiration rather than growth, the conservation identity $\Gamma_B + \Gamma_E + \text{Resp}_B = R_B$ continues to hold exactly. No carbon is created or destroyed by space limitation — it only changes the partition between biomass and CO₂.
+
+---
+
+# Part V: Conventions
+
+## 23. Units
 
 | Quantity | Unit | Equivalence |
 |----------|------|-------------|
@@ -506,7 +726,7 @@ S_O  = −α_O·(Resp_B + Resp_F + Resp_F^conv)     (+ diffusion)
 
 ---
 
-## 17. Sign Conventions
+## 24. Sign Conventions
 
 - **State variables**: always ≥ 0
 - **ψ (water potential)**: negative in unsaturated soil (e.g., −30 kPa at field capacity)
@@ -519,7 +739,7 @@ S_O  = −α_O·(Resp_B + Resp_F + Resp_F^conv)     (+ diffusion)
 
 ---
 
-## 18. Naming Conventions
+## 25. Naming Conventions
 
 | Pattern | Meaning |
 |---------|---------|
@@ -535,7 +755,7 @@ S_O  = −α_O·(Resp_B + Resp_F + Resp_F^conv)     (+ diffusion)
 
 ---
 
-## 19. Errata and Corrections
+## 26. Errata and Corrections
 
 Issues found during 2026-02-05/06 audit. The **code** has the corrected versions; the manuscript may still need updating.
 
