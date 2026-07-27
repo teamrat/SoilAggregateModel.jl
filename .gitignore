@@ -25,3 +25,20 @@ Thumbs.db
 # Development notes (local only)
 dev_notes/
 CLAUDE.md
+
+# Generated simulation output (regenerable; see paper/de_gryze/README.md)
+output/
+paper/de_gryze/output/
+
+# Generated diagnostic figures
+paper/de_gryze/*.png
+paper/de_gryze/*.pdf
+
+# macOS Finder duplicates and manual backups
+*copy
+*copy.*
+* copy *
+*_backup
+
+# Claude Code local settings
+.claude/
