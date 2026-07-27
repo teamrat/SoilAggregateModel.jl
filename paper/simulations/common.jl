@@ -27,6 +27,36 @@ STANDARD_r_0 = 0.25        # 0.5 mm diameter POM [mm]
 STANDARD_r_max = 5.0       # domain extends to 5 mm [mm]
 STANDARD_n_grid = 100      # grid resolution
 
+# POM carbon density: calibrated so r_0=0.25 mm → P_0=1000 μg-C
+# This ensures P_0 scales correctly as r_0³ for size-dependent lifecycles
+const ρ_POM = 1000.0 / ((4.0/3.0) * π * 0.25^3)  # ≈ 19098.6 μg-C/mm³
+
+"""
+    compute_P_0(r_0::Real)
+
+Compute initial POM carbon mass from radius.
+
+# Arguments
+- `r_0::Real`: POM radius [mm]
+
+# Returns
+- Initial POM carbon mass [μg-C]
+
+# Notes
+- Uses calibrated density ρ_POM ≈ 19098.6 μg-C/mm³
+- Ensures P_0 scales as r_0³ (volume scaling)
+- Calibrated so r_0=0.25 mm → P_0=1000 μg-C (default bio.P_0)
+
+# Example
+```julia
+P_0 = compute_P_0(0.25)  # 1000 μg-C (0.5 mm diameter)
+P_0 = compute_P_0(0.45)  # 5832 μg-C (0.9 mm diameter)
+```
+"""
+function compute_P_0(r_0::Real)
+    return ρ_POM * (4.0/3.0) * π * r_0^3
+end
+
 # ═══════════════════════════════════════════════════════════════
 # Output time schedules
 # ═══════════════════════════════════════════════════════════════
