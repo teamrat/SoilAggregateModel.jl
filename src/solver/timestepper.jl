@@ -7,6 +7,7 @@
                    bio::BiologicalProperties, soil::SoilProperties,
                    T_func, ψ_func, O2_func,
                    t_start::Real, t_end::Real, dt_initial::Real;
+                   t_delay::Real=0.0,
                    dt_min::Real=1e-4, dt_max::Real=0.1,
                    output_interval::Real=1.0,
                    output_times::Vector{Float64}=Float64[])
@@ -22,10 +23,19 @@ Run aggregate simulation with Strang splitting and adaptive timestep.
 - `soil::SoilProperties`: Soil parameters
 - `T_func`: Function T(t) returning temperature [K]
 - `ψ_func`: Function ψ(t) returning water potential [kPa]
-- `O2_func`: Function O2(t) returning ambient O₂ [μg/mm³]
+- `O2_func`: Function O2(t) returning **gas-phase** O₂ density [μg/mm³].
+  This is the atmospheric O₂ partial pressure converted to mass density
+  via the ideal gas law: O₂_gas = x_O₂ × P_atm × M_O₂ / (R T).
+  The solver converts this internally to aqueous O₂ at the outer
+  boundary: O₂_amb = O₂_gas / K_H(T).
 - `t_start::Real`: Start time [days]
 - `t_end::Real`: End time [days]
 - `dt_initial::Real`: Initial timestep [days]
+- `t_delay::Real`: POM activation delay [days] (default: 0.0, no delay).
+  When > 0, POM dissolution is suppressed via sigmoid
+  1/(1+exp(-(t-t_delay)/(0.1·t_delay))), allowing microbial pools to
+  equilibrate before POM input begins. Transition width is 10% of delay
+  (e.g., t_delay=10 → 90% activation by t ≈ 12.2).
 - `dt_min::Real`: Minimum allowed timestep [days] (default: 1e-4)
 - `dt_max::Real`: Maximum allowed timestep [days] (default: 0.1)
 - `output_interval::Real`: Time between outputs [days] (default: 1.0)
@@ -38,15 +48,37 @@ Named tuple with:
 - `diagnostics::Dict`: Diagnostics (total steps, rejections, etc.)
 
 # Algorithm
-Strang splitting (2nd-order accurate):
-1. Diffusion half-step (Δt/2)
-2. Reaction full-step (Δt)
-3. Diffusion half-step (Δt/2)
 
-Adaptive timestep:
-- If max(|S × Δt / u|) > 0.10 at any node → halve Δt
-- If max(|S × Δt / u|) < 0.01 everywhere → double Δt
-- Enforce dt_min ≤ Δt ≤ dt_max
+Each timestep proceeds as:
+
+1. **Environment**: evaluate T(t), ψ(t), O₂_gas(t)
+2. **Temperature**: update Arrhenius factors, Henry's law K_H, pure-phase diffusivities
+3. **Water content**: update θ(r) from van Genuchten with EPS/F_i modification
+4. **Effective diffusion**: recompute D_C, D_B, D_Fn, D_Fm, D_O from new θ
+5. **O₂ boundary condition**: convert gas-phase O₂ to aqueous: O₂_amb = O₂_gas / K_H
+6. **POM dissolution**: compute J_P and R_P at POM surface (r = r₀)
+7. **Strang splitting** (2nd-order accurate):
+   a. Diffusion half-step (Δt/2)
+   b. Reaction full-step (Δt)
+   c. Diffusion half-step (Δt/2)
+8. **Adaptive timestep**: adjust Δt based on max relative change
+
+# O₂ state variable convention
+
+The O₂ state variable is **aqueous concentration** C_aq,O₂ [μg/mm³], not
+total O₂. This choice ensures that spatially varying water content (from
+EPS modification of retention) does not create spurious advection in the
+diffusion equation. See O2_state_variable_change.md for derivation.
+
+The effective diffusion coefficient D_O^eff (from D_eff_oxygen) already
+accounts for dual-phase transport (aqueous + gas) normalized by the
+capacity (θ + K_H θ_a). Gas-phase diffusion (~10⁴× faster than aqueous)
+dominates in unsaturated pores and is fully preserved.
+
+The reaction sink S_O = -α_O · Resp / (θ + K_H θ_a) is divided by
+capacity because each unit of respiration depletes a larger reservoir
+when air content is high (K_H ≈ 30). This concentrates O₂ depletion
+in wet regions near the POM, driving anoxic zone formation.
 
 # Manuscript reference
 Architecture §2: Time integration, Strang splitting
@@ -56,6 +88,7 @@ function run_simulation(state::AggregateState, workspace::Workspace,
                        bio::BiologicalProperties, soil::SoilProperties,
                        T_func, ψ_func, O2_func,
                        t_start::Real, t_end::Real, dt_initial::Real;
+                       t_delay::Real=0.0,
                        dt_min::Real=1e-4, dt_max::Real=0.1,
                        output_interval::Real=1.0,
                        output_times::Vector{Float64}=Float64[])
@@ -104,27 +137,39 @@ function run_simulation(state::AggregateState, workspace::Workspace,
         # === Get environmental conditions ===
         T = T_func(t)
         ψ = ψ_func(t)
-        O2_amb = O2_func(t)
+        O2_gas = O2_func(t)
 
         # === Update workspace (once per timestep) ===
+
         # Temperature cache
         update_temperature_cache!(workspace.f_T, T, bio, soil)
 
-        # Water content
+        # Water content (θ changes due to EPS/F_i evolution since last step)
         update_water_content!(workspace.θ, workspace.θ_a, ψ, state, soil)
 
-        # Effective diffusion coefficients
-        update_effective_diffusion!(workspace, soil, bio, workspace.f_T)
+        # Effective diffusion coefficients (uses updated θ)
+        update_effective_diffusion!(workspace, state, soil, bio, workspace.f_T)
+
+        # === O₂ boundary condition: gas-phase → aqueous ===
+        # O2_func returns atmospheric gas-phase density [μg/mm³].
+        # State variable is aqueous C_aq = C_gas / K_H.
+        O2_amb = O2_gas / workspace.f_T.K_H_O
 
         # === Compute POM dissolution (once per timestep, Strang-consistent) ===
-        # Compute flux density at beginning of step
         B_0 = state.B[1]
         F_n_0 = state.F_n[1]
         θ_0 = workspace.θ[1]
         θ_a_0 = workspace.θ_a[1]
-        O_aq_0 = state.O[1] * θ_0 / (θ_0 + workspace.f_T.K_H_O * θ_a_0)
+        # O₂ state variable is already aqueous concentration
+        O_aq_0 = state.O[1]
         R_P_max_T = bio.R_P_max * workspace.f_T.f_pom
-        J_P_val = J_P(state.P, bio.P_0, B_0, F_n_0, θ_0, O_aq_0, R_P_max_T,
+        # POM activation delay: sigmoid switch centered at t_delay
+        # When t_delay = 0: no effect
+        # When t_delay > 0: smoothly transitions from 0 → 1 around t = t_delay
+        if t_delay > 0.0
+            R_P_max_T *= 1.0 / (1.0 + exp(-(t - t_delay) / (0.1 * t_delay)))
+        end
+        J_P_val = J_P(state.P, state.P_0, B_0, F_n_0, θ_0, O_aq_0, R_P_max_T,
                      bio.K_B_P, bio.K_F_P, bio.θ_P, bio.L_P)
 
         # Convert flux density to total rate [μg-C/day]
@@ -151,7 +196,6 @@ function run_simulation(state::AggregateState, workspace::Workspace,
         if dt_new < dt && dt > dt_min
             # Would have reduced dt → this step might be inaccurate
             # For now, accept and reduce next step
-            # (More sophisticated: reject and re-do with smaller dt)
             n_rejected += 1
         end
         dt = dt_new

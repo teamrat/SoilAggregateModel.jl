@@ -15,45 +15,10 @@ Requires: SoilProperties
 - S_C coupling: contribution is -J_M · (θ + ρ_b·k_d) / k_d, NOT just -J_M
 
 # Softplus regularization
-- Replaces max(0, x) with smooth C∞ approximation
+- Replaces max(0, x) with smooth C∞ approximation (see math_utils.jl)
 - Prevents discontinuous derivatives at M = M_eq
 - Uses numerically stable form to avoid overflow
 """
-
-"""
-    softplus(x::Real, ε::Real)
-
-Smooth approximation to max(0, x) with C∞ continuity.
-
-# Formula (manuscript Eq. 243)
-    φ_ε(x) = ε · ln(1 + exp(x/ε))
-
-Numerically stable implementation:
-    x > 0:  x + ε·ln(1 + exp(-x/ε))
-    x ≤ 0:  ε·ln(1 + exp(x/ε))
-
-# Arguments
-- `x`: Input value (can be any real)
-- `ε`: Smoothing width [same units as x]
-
-# Returns
-- Smoothed value (always ≥ 0)
-
-# Notes
-- As ε → 0: softplus(x, ε) → max(0, x)
-- For |x| >> ε: softplus(x, ε) ≈ max(0, x) to within ε
-- Typical ε = 0.01 μg/mm³ for MAOC
-- Numerically stable form avoids overflow for large |x|
-"""
-function softplus(x::Real, ε::Real)
-    if x > 0.0
-        # Stable for large positive x
-        x + ε * log(1.0 + exp(-x / ε))
-    else
-        # Stable for large negative x
-        ε * log(1.0 + exp(x / ε))
-    end
-end
 
 """
     M_eq_langmuir_freundlich(C_eq::Real, M_max::Real, k_L::Real, n_LF::Real)

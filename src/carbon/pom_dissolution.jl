@@ -32,8 +32,10 @@ function J_P(P::Real, P_0::Real, B_0::Real, F_n_0::Real, θ_0::Real, O_aq_0::Rea
     pom_factor = P / P_0
 
     # Microbial enzyme contributions (Monod kinetics)
+    # Additive coupling: bacteria and fungi contribute independently
     bacterial_contribution = B_0 / (K_B_P + B_0)
     fungal_contribution = F_n_0 / (K_F_P + F_n_0)
+    microbial_factor = 0.5 * (bacterial_contribution + fungal_contribution)
 
     # Moisture limitation
     moisture_factor = θ_0 / (θ_P + θ_0)
@@ -42,8 +44,7 @@ function J_P(P::Real, P_0::Real, B_0::Real, F_n_0::Real, θ_0::Real, O_aq_0::Rea
     oxygen_factor = O_aq_0 / (L_P + O_aq_0)
 
     # Total flux density
-    R_P_max_T * pom_factor * bacterial_contribution * fungal_contribution *
-        moisture_factor * oxygen_factor
+    R_P_max_T * pom_factor * microbial_factor * moisture_factor * oxygen_factor
 end
 
 """

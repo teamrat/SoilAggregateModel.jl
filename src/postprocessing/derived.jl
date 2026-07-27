@@ -56,7 +56,7 @@ function aqueous_concentrations(record::OutputRecord, grid::GridInfo,
     # Compute at each node
     for i in 1:n
         C_aq[i] = record.state.C[i] / retardation
-        O_aq[i] = record.state.O[i] * θ[i] / (θ[i] + K_H * θ_a[i])
+        O_aq[i] = record.state.O[i]  # state.O is already C_aq since the O_total→C_aq switch
     end
 
     return (C_aq=C_aq, O_aq=O_aq)

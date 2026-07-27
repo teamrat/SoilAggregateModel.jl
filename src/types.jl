@@ -94,6 +94,7 @@ mutable struct AggregateState
     E::Vector{Float64}      # n — EPS
     M::Vector{Float64}      # n — MAOC
     P::Float64              # scalar — POM
+    P_0::Float64            # Initial POM mass [µg-C] (fixed reference)
     CO2_cumulative::Float64 # diagnostic — total CO₂ respired
 end
 
@@ -114,6 +115,7 @@ function AggregateState(n::Int)
         Vector{Float64}(undef, n),  # E
         Vector{Float64}(undef, n),  # M
         0.0,                        # P
+        0.0,                        # P_0
         0.0                         # CO2_cumulative
     )
 end
@@ -228,6 +230,7 @@ function Base.copy(state::AggregateState)
         copy(state.E),
         copy(state.M),
         state.P,
+        state.P_0,
         state.CO2_cumulative
     )
 end

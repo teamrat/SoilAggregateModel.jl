@@ -5,7 +5,8 @@
     run_aggregate(bio::BiologicalProperties, soil::SoilProperties,
                   T_func, ψ_func, O2_func, t_span;
                   n_grid::Int=50, r_0::Real=0.1, r_max::Real=2.0,
-                  initial_state=nothing,
+                  initial_state=nothing, ic::Union{Nothing,InitialConditions}=nothing,
+                  P_0::Union{Nothing,Real}=nothing,
                   dt_initial::Real=0.01, dt_min::Real=1e-4, dt_max::Real=0.1,
                   output_times::Vector{<:Real}=Float64[])
 
@@ -23,11 +24,20 @@ Run a soil aggregate biogeochemical simulation.
 - `n_grid::Int`: Number of radial grid points (default: 50)
 - `r_0::Real`: POM radius [mm] (default: 0.1)
 - `r_max::Real`: Outer aggregate radius [mm] (default: 2.0)
-- `initial_state`: Initial AggregateState (default: uniform pools from bio parameters)
+- `initial_state`: Pre-built AggregateState (highest priority)
+- `ic::InitialConditions`: SOC-based initialization (used if initial_state is nothing)
+- `P_0::Union{Nothing,Real}`: Initial POM carbon mass [μg-C] (overrides bio.P_0)
+- `t_delay::Real`: POM activation delay [days] (default: 0.0). When > 0, POM
+  dissolution is suppressed for ~t_delay days, allowing microbial pre-equilibration.
 - `dt_initial::Real`: Initial timestep [days] (default: 0.01)
 - `dt_min::Real`: Minimum timestep [days] (default: 1e-4)
 - `dt_max::Real`: Maximum timestep [days] (default: 0.1)
-- `output_times::Vector{<:Real}`: Specific times to save output (default: regular intervals)
+- `output_times::Vector{<:Real}`: Specific times to save output
+
+# State initialization priority
+1. `initial_state` if provided (deepcopy)
+2. `ic::InitialConditions` if provided (SOC partitioning)
+3. Fallback: legacy minimal initialization (seed values)
 
 # Returns
 `SimulationResult` with fields:
@@ -40,23 +50,16 @@ Run a soil aggregate biogeochemical simulation.
 # Examples
 
 ```julia
-# Constant environment
-bio = BiologicalProperties()
-soil = SoilProperties()
-T(t) = 293.15  # 20°C
-ψ(t) = -10.0   # kPa
-O2(t) = 0.3    # μg/mm³
+# SOC-based initialization (recommended)
+bio  = BiologicalProperties()
+soil = SoilProperties(f_clay_silt = 0.42)
+ic   = InitialConditions(SOC = 18.3, s_M = 0.4)
 
-result = run_aggregate(bio, soil, T, ψ, O2, (0.0, 30.0))
+result = run_aggregate(bio, soil, T, ψ, O2, (0.0, 60.0);
+                       n_grid=200, ic=ic, r_0=0.5, r_max=12.5)
 
-# Access outputs
-for rec in result.outputs
-    println("Time ", rec.t, ": POM = ", rec.state.P, " μg-C")
-end
-
-# Access grid information
-println("Grid points: ", result.grid.n)
-println("Conservation weights: ", result.grid.W)
+# Legacy initialization (backward compatible)
+result = run_aggregate(bio, soil, T, ψ, O2, (0.0, 60.0))
 ```
 
 # Manuscript reference
@@ -66,6 +69,10 @@ function run_aggregate(bio::BiologicalProperties, soil::SoilProperties,
                       T_func, ψ_func, O2_func, t_span;
                       n_grid::Int=50, r_0::Real=0.1, r_max::Real=2.0,
                       initial_state=nothing,
+                      ic::InitialConditions=InitialConditions(),
+                      P_0::Union{Nothing,Real}=nothing,
+                      ω::Real=1.0,
+                      t_delay::Real=0.0,
                       dt_initial::Real=0.01, dt_min::Real=1e-4, dt_max::Real=0.1,
                       output_times::Vector{<:Real}=Float64[])
     # Unpack time span
@@ -77,11 +84,11 @@ function run_aggregate(bio::BiologicalProperties, soil::SoilProperties,
     # === Environment ===
     env = EnvironmentalDrivers(T_func, ψ_func, O2_func)
 
-    # === Initialize state ===
-    if initial_state === nothing
-        state = create_initial_state(n_grid, bio)
-    else
+    # === Initialize state (priority: initial_state > ic > legacy) ===
+    if initial_state !== nothing
         state = deepcopy(initial_state)
+    else
+        state = create_initial_state(n_grid, bio, soil, ic; P_0=P_0, ω=ω)
     end
 
     # === Create workspace ===
@@ -89,12 +96,10 @@ function run_aggregate(bio::BiologicalProperties, soil::SoilProperties,
 
     # === Output schedule ===
     if isempty(output_times)
-        # Interval-based output (default)
         interval = min(1.0, (t_end - t_start) / 10)
         scheduled = Float64[]
     else
-        # User-specified output times
-        interval = NaN  # Not used when output_times is specified
+        interval = NaN
         scheduled = Float64.(output_times)
     end
 
@@ -106,6 +111,7 @@ function run_aggregate(bio::BiologicalProperties, soil::SoilProperties,
         state, workspace, grid.r_grid, grid.h, bio, soil,
         T_func, ψ_func, O2_func,
         t_start, t_end, dt_initial;
+        t_delay=t_delay,
         dt_min=dt_min, dt_max=dt_max,
         output_interval=interval,
         output_times=scheduled
@@ -119,62 +125,65 @@ function run_aggregate(bio::BiologicalProperties, soil::SoilProperties,
     end
 
     params = ParameterSet(bio, soil)
-    # Convert diagnostics to Dict{String, Any} to match SimulationResult field type
     diagnostics_any = Dict{String, Any}(result.diagnostics)
     return SimulationResult(grid, params, env, outputs, diagnostics_any)
 end
 
 """
-    create_initial_state(n::Int, bio::BiologicalProperties)
+    create_initial_state_legacy(n::Int, bio::BiologicalProperties,
+                                soil::SoilProperties;
+                                P_0::Union{Nothing,Real}=nothing,
+                                T_0::Real=293.15, ψ_0::Real=-29.0,
+                                O2_gas::Real=0.2785)
 
-Create default initial state with uniform pools.
+Legacy initialization with seed values (backward compatible).
 
-# Arguments
-- `n::Int`: Number of grid points
-- `bio::BiologicalProperties`: Biological parameters for initial POM mass
-
-# Returns
-- `AggregateState`: Initial state with small uniform pools and full POM
+Uses minimum viable microbial concentrations and computes O₂ and MAOC
+from first principles, but does NOT partition from measured SOC.
+Use `create_initial_state(n, bio, soil, ic)` for SOC-based initialization.
 
 # Notes
-Physically realistic initialization for POM-driven aggregate formation:
-- C: Background DOC (0.01 μg/mm³)
-- B: Minimum viable bacteria (bio.B_min, ~0.1 μg/mm³)
-- F_n, F_m: Small fungal seed (B_min/10, ~0.01 μg/mm³)
-- F_i: No insulated fungi initially (0.0 μg/mm³, develops over time)
-- E: No EPS initially (0.0 μg/mm³, produced by bacteria)
-- M: No MAOC initially (0.0 μg/mm³, accumulates from DOC sorption)
-- O: Ambient O₂ (0.27 μg/mm³, ~21% atmospheric)
-- P: Initial POM mass from bio.P_0
-- CO2_cumulative: 0.0
-
-This initialization ensures POM dissolution is the primary carbon source,
-allowing microbial populations to grow from seed values and aggregate
-structure to emerge organically.
+- Kept for backward compatibility with existing scripts
+- New scripts should use InitialConditions-based initialization
 """
-function create_initial_state(n::Int, bio::BiologicalProperties)
+function create_initial_state_legacy(n::Int, bio::BiologicalProperties,
+                                     soil::SoilProperties;
+                                     P_0::Union{Nothing,Real}=nothing,
+                                     T_0::Real=293.15, ψ_0::Real=-29.0,
+                                     O2_gas::Real=0.2785)
     state = AggregateState(n)
 
-    # Background DOC (trace concentration)
-    state.C .= 0.01
+    # Background DOC
+    C_0 = 1e-4  # [µg/mm³]
+    state.C .= C_0
 
     # Minimum viable microbial seed
-    state.B .= bio.B_min           # Bacteria at minimum viable
-    state.F_n .= bio.B_min / 10    # Small fungal seed
-    state.F_m .= bio.B_min / 100   # Even smaller mobile pool
-    state.F_i .= 0.0               # Insulated fungi develop over time
+    state.B   .= bio.B_min
+    state.F_n .= bio.F_n_min
+    state.F_m .= bio.F_m_min
+    state.F_i .= bio.F_i_min
 
     # Pools that develop over time
-    state.E .= 0.0    # EPS produced by bacteria
-    state.M .= 0.0    # MAOC accumulates from DOC sorption
+    state.E .= 0.0
 
-    # Ambient oxygen
-    state.O .= 0.27   # ~21% atmospheric O₂
+    # Water content at ψ_0
+    m_vg = 1.0 - 1.0 / soil.n_vg
+    θ_0 = soil.θ_r + (soil.θ_s - soil.θ_r) *
+          (1.0 + (-soil.α_vg * ψ_0)^soil.n_vg)^(-m_vg)
+    θ_a_0 = soil.θ_s - θ_0
 
-    # Initial POM from parameters
-    state.P = bio.P_0
+    # MAOC at equilibrium with initial DOC
+    C_aq_0 = C_0 / (θ_0 + soil.ρ_b * soil.k_d_eq)
+    C_eq_0 = soil.k_d_eq * C_aq_0
+    state.M .= M_eq_langmuir_freundlich(C_eq_0, soil.M_max, soil.k_L, soil.n_LF)
 
-    # No CO2 yet
+    # Oxygen: total soil (dissolved + gas)
+    K_H = K_H_O2(T_0)
+    state.O .= O2_gas * (θ_0 + K_H * θ_a_0) / K_H
+
+    # POM
+    state.P = isnothing(P_0) ? bio.P_0 : Float64(P_0)
+    state.P_0 = state.P  
     state.CO2_cumulative = 0.0
 
     return state
@@ -185,30 +194,21 @@ end
 
 Compute total carbon in the system.
 
-# Arguments
-- `state::AggregateState`: Current state
-- `r_grid::Vector{Float64}`: Radial grid [mm]
-- `h::Real`: Grid spacing [mm]
-
 # Returns
-- Total carbon [μg-C]
+- Total carbon [µg-C]
 
 # Notes
 - Uses conservation weights W_i = 4πr_i²h
 - C_total = P + ∑(C+B+F_n+F_m+F_i+E+M)×W_i + CO2
 """
 function compute_total_carbon(state::AggregateState, r_grid::Vector{Float64}, h::Real)
-    # Sum dissolved + biomass pools
     integral = 0.0
     for i in 1:length(state.C)
         C_pools = state.C[i] + state.B[i] + state.F_n[i] + state.F_m[i] +
                  state.F_i[i] + state.E[i] + state.M[i]
-        # Conservation weight (matches spherical Laplacian stencil)
         W_i = 4.0 * π * r_grid[i]^2 * h
         integral += C_pools * W_i
     end
-
-    # Total carbon = POM + dissolved/biomass + respired
     return state.P + integral + state.CO2_cumulative
 end
 
@@ -218,22 +218,8 @@ end
 
 Compute carbon mass balance error for diagnostic purposes.
 
-# Arguments
-- `state::AggregateState`: Current state
-- `r_grid::Vector{Float64}`: Radial grid [mm]
-- `h::Real`: Grid spacing [mm]
-- `C_initial::Real`: Initial total carbon [μg-C]
-
 # Returns
 - Relative error: (C_total - C_initial) / C_initial
-
-# Notes
-- Uses conservation weights W_i = 4πr_i²h
-- C_total = P + ∑(C+B+F_n+F_m+F_i+E+M)×W_i + CO2
-- Should be O(machine precision) for correct implementation
-
-# Manuscript reference
-Architecture §16: Validation, carbon conservation
 """
 function compute_carbon_balance_error(state::AggregateState, r_grid::Vector{Float64},
                                      h::Real, C_initial::Real)

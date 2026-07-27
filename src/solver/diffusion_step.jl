@@ -58,7 +58,7 @@ function diffusion_step!(state::AggregateState, workspace::Workspace,
     # === 4. F_m (mobile fungi) ===
     # Inner: Zero flux
     # Outer: Zero flux
-    # Note: D_Fm is spatially uniform (no tortuosity), but stored as vector in workspace
+    # Note: D_Fm is now spatially varying (network-dependent, see effective_diffusion.jl)
     crank_nicolson_step!(state.F_m, workspace.D_Fm, dt_half, r_grid, h,
                         workspace.lower, workspace.diag, workspace.upper, workspace.rhs,
                         neumann_zero, neumann_zero, 0.0, 0.0)
@@ -66,9 +66,18 @@ function diffusion_step!(state::AggregateState, workspace::Workspace,
     # === 5. O (oxygen) ===
     # Inner: Zero flux
     # Outer: Dirichlet (ambient concentration)
+    # NOTE: Backward Euler (theta=1.0) is required here.
+    # O₂ diffuses ~100-1000× faster than other species (gas-phase transport),
+    # giving Fo = D_eff × dt_half / h² ≈ 42,600 >> 1 for typical parameters.
+    # CN (theta=0.5) with Fo >> 1 acts as a "reflection about steady-state":
+    #   CN(u)[1] ≈ 2×O2_amb - u[1]
+    # The Strang split D(dt/2)→R(dt)→D(dt/2) then INVERTS the reaction sign:
+    #   net effect = u_old + δ (grows) instead of u_old - δ (depletes).
+    # Backward Euler (theta=1.0) with Fo >> 1 projects to steady state, which
+    # is physically correct since O₂ equilibrates in ~minutes, far faster than dt.
     crank_nicolson_step!(state.O, workspace.D_O, dt_half, r_grid, h,
                         workspace.lower, workspace.diag, workspace.upper, workspace.rhs,
-                        neumann_zero, dirichlet, 0.0, O_amb)
+                        neumann_zero, dirichlet, 0.0, O_amb; theta=1.0)
 
     nothing
 end

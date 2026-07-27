@@ -104,32 +104,44 @@ function D_eff_fungi_noninsulated(D_Fn0_ref::Real, f_Arrhenius::Real, θ::Real, 
 end
 
 """
-    D_eff_fungi_mobile(D_Fm0_ref::Real, f_Arrhenius::Real)
+    D_eff_fungi_mobile(D_Fm0_ref::Real, f_Arrhenius::Real,
+                       F_n::Real, F_i::Real, K_D::Real)
 
 Effective diffusion coefficient for mobile fungi (internal translocation).
 
 # Formula
-    D_Fm = D_Fm0_ref × f_Arrhenius
+    D_Fm = D_Fm0_ref × f_Arrhenius × (F_n + F_i) / (F_n + F_i + K_D)
 
-No tortuosity factor! Internal translocation occurs within the hyphal network,
-not through pore space.
+Network-dependent: translocation requires an established hyphal network.
+Where sessile biomass (F_n + F_i) is sparse, diffusivity → 0.
+Where the network is dense, diffusivity → D_Fm0_ref × f_Arrhenius.
 
 # Arguments
 - `D_Fm0_ref`: Reference translocation rate at T_ref [mm²/day]
 - `f_Arrhenius`: Arrhenius temperature factor [-]
+- `F_n`: Non-insulated fungi at this node [μg/mm³]
+- `F_i`: Insulated fungi at this node [μg/mm³]
+- `K_D`: Half-saturation for network density [μg/mm³]
 
 # Returns
-- Effective D_Fm [mm²/day] (scalar, spatially uniform)
+- Effective D_Fm [mm²/day] (spatially varying)
 
 # Notes
-- Internal transport through existing hyphae
-- NOT limited by water content or pore connectivity
-- Mobile fungi can transport through dry regions
+- Follows Falconer et al. (2005) principle: transport requires connected network
+- Michaelis-Menten form gives smooth transition (vs Falconer's sharp switch)
+- K_D = K_D_Fm_factor × (F_n_min + F_i_min): network must exceed ~10× survival
+  threshold for efficient translocation (MATLAB: D_Fm * (Fi+Fn)/(Fi+Fn+10*(Fi_min+Fn_min)))
+- NOT limited by soil tortuosity (transport is internal to hyphae)
 - Temperature-dependent (active biological process)
-- This is a key mechanism for nutrient scavenging in dry zones
+- Creates radial gradient: fungi spread outward as network extends from POM
+
+# Manuscript reference
+Eq. XX: Network-dependent translocation diffusivity
 """
-function D_eff_fungi_mobile(D_Fm0_ref::Real, f_Arrhenius::Real)
-    D_Fm0_ref * f_Arrhenius
+function D_eff_fungi_mobile(D_Fm0_ref::Real, f_Arrhenius::Real,
+                            F_n::Real, F_i::Real, K_D::Real)
+    F_network = F_n + F_i
+    D_Fm0_ref * f_Arrhenius * F_network / (F_network + K_D)
 end
 
 """
@@ -178,7 +190,8 @@ function D_eff_oxygen(D_O2_w::Real, D_O2_a::Real, K_H::Real, θ::Real, θ_a::Rea
 end
 
 """
-    update_effective_diffusion!(workspace::Workspace, soil::SoilProperties,
+    update_effective_diffusion!(workspace::Workspace, state::AggregateState,
+                                soil::SoilProperties,
                                 bio::BiologicalProperties, temp_cache::TemperatureCache)
 
 Update all effective diffusion coefficients in workspace (in-place).
@@ -188,17 +201,20 @@ Called once per timestep after water content update.
 
 # Arguments
 - `workspace`: Workspace with θ, θ_a, D_C, D_B, D_Fn, D_Fm, D_O, f_T
+- `state`: AggregateState (needed for F_n, F_i → network-dependent D_Fm)
 - `soil`: SoilProperties
-- `bio`: BiologicalProperties (for D_Fn0, D_Fm0)
+- `bio`: BiologicalProperties (for D_Fn0, D_Fm0, F_n_min, F_i_min)
 - `temp_cache`: TemperatureCache with current temperature-dependent values
 
 # Returns
-- Nothing (modifies workspace.D_C, D_B, D_Fn, D_Fm, D_O, and temp_cache.D_Fm in-place)
+- Nothing (modifies workspace.D_C, D_B, D_Fn, D_Fm, D_O in-place)
 
 # Notes
 - Requires θ and θ_a to be updated first (call update_water_content! before this)
 - Zero allocations (uses pre-allocated workspace arrays)
-- D_Fm is spatially uniform (constant value at all nodes) but stored as vector for solver
+- D_Fm is now spatially varying: depends on local hyphal network density (F_n + F_i)
+  Follows MATLAB: D_Fm_eff = D_Fm * (Fi+Fn)/(Fi+Fn + 10*(Fi_min+Fn_min))
+  See Falconer et al. (2005) for network-dependent transport principle.
 
 # Examples
 
@@ -207,17 +223,14 @@ Called once per timestep after water content update.
 T = env.T(t)
 update_temperature_cache!(ws.f_T, T, bio, soil)
 update_water_content!(ws.θ, ws.θ_a, ψ, state, soil)
-update_effective_diffusion!(ws, soil, bio, ws.f_T)
-# Now ws.D_C, D_B, D_Fn, D_O are ready for diffusion step
+update_effective_diffusion!(ws, state, soil, bio, ws.f_T)
+# Now ws.D_C, D_B, D_Fn, D_Fm, D_O are ready for diffusion step
 ```
 """
-function update_effective_diffusion!(workspace::Workspace, soil::SoilProperties,
+function update_effective_diffusion!(workspace::Workspace, state::AggregateState,
+                                     soil::SoilProperties,
                                      bio::BiologicalProperties, temp_cache::TemperatureCache)
     n = length(workspace.θ)
-
-    # Mobile fungi (spatially uniform, no tortuosity)
-    D_Fm_val = D_eff_fungi_mobile(bio.D_Fm0, temp_cache.f_fun)
-    temp_cache.D_Fm = D_Fm_val  # Store in cache for convenience
 
     # Spatially varying diffusion coefficients
     @inbounds for i in 1:n
@@ -235,8 +248,9 @@ function update_effective_diffusion!(workspace::Workspace, soil::SoilProperties,
         workspace.D_Fn[i] = D_eff_fungi_noninsulated(bio.D_Fn0, temp_cache.f_fun,
                                                        θ_i, soil.θ_s)
 
-        # Mobile fungi (spatially uniform)
-        workspace.D_Fm[i] = D_Fm_val
+        # Mobile fungi (network-dependent translocation)
+        workspace.D_Fm[i] = D_eff_fungi_mobile(bio.D_Fm0, temp_cache.f_fun,
+                                                state.F_n[i], state.F_i[i], bio.K_Fm_net)
 
         # Oxygen (dual-phase: aqueous + gas)
         workspace.D_O[i] = D_eff_oxygen(temp_cache.D_O2_w, temp_cache.D_O2_a,

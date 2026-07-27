@@ -100,31 +100,31 @@ function reaction_step!(state::AggregateState, workspace::Workspace, dt::Real,
 
         # Carbon species (NOT oxygen)
         if state.C[i] < 0.0
-            clip_carbon += abs(state.C[i]) * volume_i
+            clip_carbon += state.C[i] * volume_i
             state.C[i] = 0.0
         end
         if state.B[i] < 0.0
-            clip_carbon += abs(state.B[i]) * volume_i
+            clip_carbon += state.B[i] * volume_i
             state.B[i] = 0.0
         end
         if state.F_n[i] < 0.0
-            clip_carbon += abs(state.F_n[i]) * volume_i
+            clip_carbon += state.F_n[i] * volume_i
             state.F_n[i] = 0.0
         end
         if state.F_m[i] < 0.0
-            clip_carbon += abs(state.F_m[i]) * volume_i
+            clip_carbon += state.F_m[i] * volume_i
             state.F_m[i] = 0.0
         end
         if state.F_i[i] < 0.0
-            clip_carbon += abs(state.F_i[i]) * volume_i
+            clip_carbon += state.F_i[i] * volume_i
             state.F_i[i] = 0.0
         end
         if state.E[i] < 0.0
-            clip_carbon += abs(state.E[i]) * volume_i
+            clip_carbon += state.E[i] * volume_i
             state.E[i] = 0.0
         end
         if state.M[i] < 0.0
-            clip_carbon += abs(state.M[i]) * volume_i
+            clip_carbon += state.M[i] * volume_i
             state.M[i] = 0.0
         end
 
@@ -142,7 +142,7 @@ function reaction_step!(state::AggregateState, workspace::Workspace, dt::Real,
 
     # Enforce non-negativity — track clipped carbon
     if state.P < 0.0
-        state.CO2_cumulative += abs(state.P)  # POM is scalar, not per-volume
+        state.CO2_cumulative += state.P  # POM is scalar, not per-volume (negative value decreases CO2)
         state.P = 0.0
     end
 

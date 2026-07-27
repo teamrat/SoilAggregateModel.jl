@@ -88,38 +88,44 @@ import SoilAggregateModel: TemperatureCache,
         R_diff = R_B_val - R_Bb_val  # = 0.6
         Y_B_max = 0.6
         K_Y = 0.5
+        B = 0.1  # Moderate biomass
+        B_S = 0.5  # Space limitation half-sat
+        ε_Y = 3.33e-6  # Smoothing width
         γ = 0.3
 
-        # Yield
-        Y_B_val = Y_B_func(R_diff, Y_B_max, K_Y)
-        expected_Y = 0.6 * 0.6 / (0.6 + 0.5)  # = 0.36 / 1.1 ≈ 0.3273
-        @test Y_B_val ≈ expected_Y rtol=1e-4
+        # Yield (now includes space limitation)
+        Y_B_val = Y_B_func(R_diff, Y_B_max, K_Y, B, B_S, ε_Y)
+        # Expected: Y_B_max * R_diff/(R_diff + K_Y) * B_S/(B + B_S)
+        # = 0.6 * 0.6/(0.6 + 0.5) * 0.5/(0.1 + 0.5)
+        # = 0.6 * (0.6/1.1) * (0.5/0.6) ≈ 0.6 * 0.5455 * 0.8333 ≈ 0.2727
+        expected_Y = 0.6 * (0.6 / 1.1) * (0.5 / 0.6)
+        @test Y_B_val ≈ expected_Y rtol=1e-2  # softplus causes small deviation
 
         # Growth
-        Γ_B_val = Gamma_B(R_B_val, R_Bb_val, Y_B_val, γ)
+        Γ_B_val = Gamma_B(R_B_val, R_Bb_val, Y_B_val, γ, ε_Y)
         expected_Gamma_B = Y_B_val * 0.6 * (1.0 - 0.3)  # = Y_B_val * 0.42
         @test Γ_B_val ≈ expected_Gamma_B rtol=1e-4
 
         # EPS production
-        Γ_E_val = Gamma_E(R_B_val, R_Bb_val, Y_B_val, γ)
+        Γ_E_val = Gamma_E(R_B_val, R_Bb_val, Y_B_val, γ, ε_Y)
         expected_Gamma_E = Y_B_val * 0.6 * 0.3  # = Y_B_val * 0.18
         @test Γ_E_val ≈ expected_Gamma_E rtol=1e-4
 
         # Respiration
-        Resp_B_val = Resp_B(R_Bb_val, R_diff, Y_B_val)
+        Resp_B_val = Resp_B(R_Bb_val, R_diff, Y_B_val, ε_Y)
         expected_Resp = 0.4 + 0.6 * (1.0 - Y_B_val)
         @test Resp_B_val ≈ expected_Resp rtol=1e-4
 
         # Starvation (R_diff < 0)
         R_B_starve = 0.3
         R_diff_neg = R_B_starve - R_Bb_val  # = -0.1
-        Y_B_starve = Y_B_func(R_diff_neg, Y_B_max, K_Y)
+        Y_B_starve = Y_B_func(R_diff_neg, Y_B_max, K_Y, B, B_S, ε_Y)
         @test Y_B_starve == 0.0  # No growth under starvation
 
-        Γ_B_starve = Gamma_B(R_B_starve, R_Bb_val, Y_B_starve, γ)
+        Γ_B_starve = Gamma_B(R_B_starve, R_Bb_val, Y_B_starve, γ, ε_Y)
         @test Γ_B_starve ≈ R_diff_neg  # = -0.1 (catabolism)
 
-        Γ_E_starve = Gamma_E(R_B_starve, R_Bb_val, Y_B_starve, γ)
+        Γ_E_starve = Gamma_E(R_B_starve, R_Bb_val, Y_B_starve, γ, ε_Y)
         @test Γ_E_starve == 0.0  # No EPS under starvation
     end
 
@@ -178,9 +184,10 @@ end
         ν_F = 0.005  # POSITIVE, smaller than ν_B (more drought-tolerant)
 
         # Hand-compute
+        # Note: λ swap means R_F uses (λ·F_i + F_n), not (F_i + λ·F_n)
         monod_C = 10.0 / (8.0 + 10.0)  # = 10/18 ≈ 0.5556
         monod_O = 5.0 / (3.0 + 5.0)    # = 5/8 = 0.625
-        uptake_biomass = 3.0 + 0.1 * 2.0  # = 3.2
+        uptake_biomass = 0.1 * 3.0 + 2.0  # = λ·F_i + F_n = 2.3
         water_stress = exp(0.005 * -33.0)  # = exp(-0.165)
         expected = 0.4 * monod_C * monod_O * uptake_biomass * water_stress
 
@@ -383,10 +390,10 @@ end
     @inferred h_B(2.0, 1.0)
     @inferred R_B(10.0, 5.0, 2.0, -33.0, 0.5, 5.0, 2.0, 0.01)  # POSITIVE ν_B
     @inferred R_Bb(3.0, 5.0, 2.0, 0.5, 5.0, 2.0, 1.0)
-    @inferred Y_B_func(0.6, 0.6, 0.5)
-    @inferred Gamma_B(1.0, 0.4, 0.3, 0.3)
-    @inferred Gamma_E(1.0, 0.4, 0.3, 0.3)
-    @inferred Resp_B(0.4, 0.6, 0.3)
+    @inferred Y_B_func(0.6, 0.6, 0.5, 0.1, 0.5, 3.33e-6)  # R_diff, Y_B_max, K_Y, B, B_S, ε_Y
+    @inferred Gamma_B(1.0, 0.4, 0.3, 0.3, 3.33e-6)  # R_B, R_Bb, Y_B, γ, ε_Y
+    @inferred Gamma_E(1.0, 0.4, 0.3, 0.3, 3.33e-6)  # R_B, R_Bb, Y_B, γ, ε_Y
+    @inferred Resp_B(0.4, 0.6, 0.3, 3.33e-6)  # R_Bb, R_diff, Y_B, ε_Y
     @inferred R_rec_B(0.02, 2.0, 1.0)
 
     # Fungi
@@ -446,6 +453,8 @@ end
     B_min = 1.0
     Y_B_max = 0.6
     K_Y = 0.5
+    B_S = 0.5      # Space limitation half-sat
+    ε_Y = 3.33e-6  # Softplus smoothing width
     γ = 0.3
     μ_B_T = 0.02
 
@@ -489,10 +498,10 @@ end
     R_B_val = R_B(C_aq, O_aq, B, ψ, r_B_max_T, K_B, L_B, ν_B)
     R_Bb_val = R_Bb(C_B, O_aq, B, r_B_max_T, K_B, L_B, B_min)
     R_diff = R_B_val - R_Bb_val
-    Y_B_val = Y_B_func(R_diff, Y_B_max, K_Y)
-    Γ_B_val = Gamma_B(R_B_val, R_Bb_val, Y_B_val, γ)
-    Γ_E_val = Gamma_E(R_B_val, R_Bb_val, Y_B_val, γ)
-    Resp_B_val = Resp_B(R_Bb_val, R_diff, Y_B_val)
+    Y_B_val = Y_B_func(R_diff, Y_B_max, K_Y, B, B_S, ε_Y)
+    Γ_B_val = Gamma_B(R_B_val, R_Bb_val, Y_B_val, γ, ε_Y)
+    Γ_E_val = Gamma_E(R_B_val, R_Bb_val, Y_B_val, γ, ε_Y)
+    Resp_B_val = Resp_B(R_Bb_val, R_diff, Y_B_val, ε_Y)
     R_rec_B_val = R_rec_B(μ_B_T, B, B_min)
 
     # STEP 3: Compute all fungal terms

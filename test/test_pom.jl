@@ -23,15 +23,14 @@ import SoilAggregateModel: J_P, R_P
 
         # Hand-calculated expected values
         pom_factor = P / P_0                     # 0.8
-        bacterial = B_0 / (K_B_P + B_0)          # 5/(1+5) = 0.8333...
-        fungal = F_n_0 / (K_F_P + F_n_0)         # 3/(1+3) = 0.75
-        moisture = θ_0 / (θ_P + θ_0)             # 0.25/(0.1+0.25) = 0.7142857...
-        oxygen = O_aq_0 / (L_P + O_aq_0)         # 0.1/(0.05+0.1) = 0.6666...
+        bacterial = B_0 / (K_B_P + B_0)          # 5/(1+5) = 5/6
+        fungal = F_n_0 / (K_F_P + F_n_0)         # 3/(1+3) = 3/4 = 0.75
+        microbial = 0.5 * (bacterial + fungal)   # 0.5 * (5/6 + 3/4) = 0.5 * 19/12
+        moisture = θ_0 / (θ_P + θ_0)             # 0.25/(0.1+0.25) = 25/35 = 5/7
+        oxygen = O_aq_0 / (L_P + O_aq_0)         # 0.1/(0.05+0.1) = 2/3
 
-        expected_J_P = R_P_max_T * pom_factor * bacterial * fungal * moisture * oxygen
-        # = 0.5 * 0.8 * 0.8333... * 0.75 * 0.7142857 * 0.6666...
-        # = 0.5 * 0.8 * 0.8333... * 0.75 * 0.7142857 * 0.6666...
-        expected_J_P_calc = 0.5 * 0.8 * (5.0/6.0) * 0.75 * (25.0/35.0) * (2.0/3.0)
+        # Additive formula: 0.5 * (bacterial + fungal) instead of bacterial * fungal
+        expected_J_P_calc = 0.5 * 0.8 * 0.5 * (5.0/6.0 + 0.75) * (5.0/7.0) * (2.0/3.0)
 
         J_P_val = J_P(P, P_0, B_0, F_n_0, θ_0, O_aq_0, R_P_max_T, K_B_P, K_F_P, θ_P, L_P)
         @test J_P_val ≈ expected_J_P_calc rtol=1e-10
@@ -52,16 +51,24 @@ import SoilAggregateModel: J_P, R_P
         @test R_P_val == 0.0
     end
 
-    # === Test 3: No bacteria → minimal flux ===
+    # === Test 3: No bacteria → fungi still contribute (additive coupling) ===
     @testset "No bacteria" begin
         J_P_val = J_P(800.0, 1000.0, 0.0, 3.0, 0.25, 0.1, 0.5, 1.0, 1.0, 0.1, 0.05)
-        @test J_P_val ≈ 0.0 atol=1e-12  # 0/(K_B_P + 0) = 0
+        # Additive: microbial_factor = 0.5 * (0 + 3/(1+3)) = 0.5 * 0.75 = 0.375
+        # J_P = 0.5 * 0.8 * 0.375 * (25/35) * (2/3)
+        expected = 0.5 * 0.8 * 0.375 * (25.0/35.0) * (2.0/3.0)
+        @test J_P_val ≈ expected rtol=1e-10
+        @test J_P_val > 0.0  # Non-zero when only fungi present
     end
 
-    # === Test 4: No fungi → minimal flux ===
+    # === Test 4: No fungi → bacteria still contribute (additive coupling) ===
     @testset "No fungi" begin
         J_P_val = J_P(800.0, 1000.0, 5.0, 0.0, 0.25, 0.1, 0.5, 1.0, 1.0, 0.1, 0.05)
-        @test J_P_val ≈ 0.0 atol=1e-12  # 0/(K_F_P + 0) = 0
+        # Additive: microbial_factor = 0.5 * (5/(1+5) + 0) = 0.5 * 5/6 = 5/12
+        # J_P = 0.5 * 0.8 * (5/12) * (25/35) * (2/3)
+        expected = 0.5 * 0.8 * (5.0/12.0) * (25.0/35.0) * (2.0/3.0)
+        @test J_P_val ≈ expected rtol=1e-10
+        @test J_P_val > 0.0  # Non-zero when only bacteria present
     end
 
     # === Test 5: No water → minimal flux ===
@@ -94,6 +101,7 @@ import SoilAggregateModel: J_P, R_P
     # === Test 8: Half-saturation behavior ===
     @testset "Half-saturation (bacteria)" begin
         # When B_0 = K_B_P, bacterial contribution = 0.5
+        # With additive coupling and saturating fungi, microbial = 0.5*(0.5 + ~1.0) = 0.75
         B_0 = 1.0  # = K_B_P
         F_n_0 = 1000.0  # Saturating
         θ_0 = 10.0      # Saturating
@@ -101,13 +109,14 @@ import SoilAggregateModel: J_P, R_P
 
         J_P_val = J_P(1000.0, 1000.0, B_0, F_n_0, θ_0, O_aq_0, 1.0, 1.0, 1.0, 0.1, 0.05)
 
-        # Expected: 1.0 * 1.0 * 0.5 * ~1.0 * ~1.0 * ~1.0 ≈ 0.5
-        # (other factors at 1000 give ~0.999 each, so ~1.6% total deviation)
-        @test J_P_val ≈ 0.5 rtol=2e-2
+        # Expected: 1.0 * 1.0 * 0.5 * (0.5 + ~1.0) * ~1.0 * ~1.0 ≈ 0.75
+        # (other factors at 1000 give ~0.999 each, so ~1% total deviation)
+        @test J_P_val ≈ 0.75 rtol=2e-2
     end
 
     @testset "Half-saturation (fungi)" begin
         # When F_n_0 = K_F_P, fungal contribution = 0.5
+        # With additive coupling and saturating bacteria, microbial = 0.5*(~1.0 + 0.5) = 0.75
         B_0 = 1000.0    # Saturating
         F_n_0 = 1.0     # = K_F_P
         θ_0 = 10.0      # Saturating
@@ -115,9 +124,9 @@ import SoilAggregateModel: J_P, R_P
 
         J_P_val = J_P(1000.0, 1000.0, B_0, F_n_0, θ_0, O_aq_0, 1.0, 1.0, 1.0, 0.1, 0.05)
 
-        # Expected: 1.0 * 1.0 * ~1.0 * 0.5 * ~1.0 * ~1.0 ≈ 0.5
-        # (other factors at 1000 give ~0.999 each, so ~1.6% total deviation)
-        @test J_P_val ≈ 0.5 rtol=2e-2
+        # Expected: 1.0 * 1.0 * 0.5 * (~1.0 + 0.5) * ~1.0 * ~1.0 ≈ 0.75
+        # (other factors at 1000 give ~0.999 each, so ~1% total deviation)
+        @test J_P_val ≈ 0.75 rtol=2e-2
     end
 
     @testset "Half-saturation (moisture)" begin

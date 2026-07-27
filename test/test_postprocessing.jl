@@ -115,9 +115,9 @@ using Test
             @test aq.C_aq[i] <= rec.state.C[i] + 1e-15
         end
 
-        # O_aq <= O (Henry's law partitioning reduces aqueous concentration)
+        # O_aq == state.O (state.O is already C_aq since the O_total→C_aq switch)
         for i in 1:result.grid.n
-            @test aq.O_aq[i] <= rec.state.O[i] + 1e-15
+            @test aq.O_aq[i] ≈ rec.state.O[i] atol=1e-15
         end
     end
 

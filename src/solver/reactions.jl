@@ -45,7 +45,7 @@ Compute all source/sink terms at a single grid node.
   - `F_i`: Insulated fungi [μg-C/mm³]
   - `E`: EPS [μg-C/mm³]
   - `M`: MAOC [μg-C/mm³]
-  - `O`: Total oxygen [μg/mm³]
+  - `O`: Aqueous oxygen concentration [μg/mm³]
   - `θ`: Water content [-]
   - `θ_a`: Air-filled porosity [-]
   - `ψ`: Water potential [kPa]
@@ -61,7 +61,8 @@ Compute all source/sink terms at a single grid node.
 - All biology functions are imported from biology/*.jl
 - Follows exact computation order from test_biology.jl (verified against manuscript)
 - Zero allocation (all computations scalar)
-- CRITICAL: Uses corrected formulas (no MAOC factor in S_C, trans_n already has η)
+- CRITICAL: ζ splitting is handled inside fungal_transitions() — no separate insulation term
+  (matches MATLAB / Falconer 2005, 2008)
 
 # Manuscript reference
 Architecture §4: Reaction step, source/sink terms
@@ -73,7 +74,7 @@ function compute_source_terms(C::Real, B::Real, F_n::Real, F_m::Real, F_i::Real,
     # === STEP 1: Compute C_aq, C_eq, O_aq ONCE ===
     C_aq = C / (θ + soil.ρ_b * soil.k_d_eq)
     C_eq = soil.k_d_eq * C_aq
-    O_aq = O * θ / (θ + temp_cache.K_H_O * θ_a)
+    O_aq = O    
 
     # === STEP 2: Bacterial terms ===
     # Temperature-dependent rates
@@ -124,7 +125,7 @@ function compute_source_terms(C::Real, B::Real, F_n::Real, F_m::Real, F_i::Real,
     # Respiration
     Resp_F_val = Resp_F(R_F_val, Y_F_val)
 
-    # Transitions (insulation, mobilization, translocation, conversion respiration)
+    # Transitions (ζ splitting already applied inside fungal_transitions)
     trans = fungal_transitions(F_i, F_n, F_m, Π_val, α_i_T, α_n_T, β_i_T, β_n_T,
                                ζ_T, bio.delta, bio.η_conv, bio.ε_F)
 
@@ -152,15 +153,18 @@ function compute_source_terms(C::Real, B::Real, F_n::Real, F_m::Real, F_i::Real,
 
     # === STEP 7: Compute source terms ===
     # CRITICAL: S_C uses corrected formula (no factor on J_M)
-    # CRITICAL: S_Fn uses trans.trans_n directly (already contains η)
+    # CRITICAL: ζ splitting handled in fungal_transitions — immobil_i includes ζ·trans_n,
+    #           immobil_n = (1-ζ)·trans_n. No separate insulation term.
+    #           (Matches MATLAB lines 389-390, 404-406; Falconer 2005/2008)
     S_C_val = -R_B_val - R_F_val + R_rec_total - J_M_val
     S_B_val = Γ_B_val - R_rec_B_val
-    S_Fn_val = trans.trans_n - trans.insulation
-    S_Fm_val = Γ_F_val - trans.trans_i - trans.trans_n - trans.Resp_F_conv
-    S_Fi_val = trans.insulation + trans.trans_i - R_rec_F_val
+    S_Fn_val = trans.immobil_n
+    S_Fm_val = Γ_F_val - trans.immobil_i - trans.immobil_n - trans.Resp_F_conv
+    S_Fi_val = trans.immobil_i - R_rec_F_val
     S_E_val = Γ_E_val - R_rec_E_val
     S_M_val = J_M_val
-    S_O_val = -bio.α_O * Resp_total_val
+    capacity_O = θ + temp_cache.K_H_O * θ_a
+    S_O_val = -bio.α_O * Resp_total_val / capacity_O
 
     SourceTerms(S_C_val, S_B_val, S_Fn_val, S_Fm_val, S_Fi_val, S_E_val, S_M_val,
                 S_O_val, Resp_total_val)

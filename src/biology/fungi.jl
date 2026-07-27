@@ -13,6 +13,8 @@ Requires: BiologicalProperties
 - Resp_F_conv uses abs() to handle mobilization correctly (MANUSCRIPT_CHANGES #2)
 - Π = F_m / (F_i + F_n + ε_F) has division-by-zero protection
 - All transition rates share single Ea_F activation energy
+- ζ is a SPLITTING FRACTION (Falconer 2005/2008), not an independent drain
+  (see julia_falconer_deviations.md, Deviation #2)
 """
 
 """
@@ -268,36 +270,45 @@ Compute all fungal transition rates and conversion respiration.
 
 # Returns
 Named tuple with:
-- `trans_i`: Net transfer to F_i from F_m [μg-C/mm³/day]
-- `trans_n`: Net transfer to F_n from F_m [μg-C/mm³/day]
-- `insulation`: Insulation F_n → F_i [μg-C/mm³/day]
+- `immobil_i`: Immobilization flux to F_i (from F_m, includes ζ split) [μg-C/mm³/day]
+- `immobil_n`: Immobilization flux to F_n (from F_m, after ζ split) [μg-C/mm³/day]
 - `Resp_F_conv`: Conversion respiration cost [μg-C/mm³/day]
 
-# Formulas (manuscript Eqs. 360-363)
-Insulation (non-insulated → insulated):
-    ζ(T) · F_n
+# Formulas (matching MATLAB / Falconer 2005, 2008)
 
-Net immobilization to F_i (mobile → insulated):
-    η · (β_i(T)·Π - α_i(T)·Π^δ) · F_i
+ζ is a SPLITTING FRACTION on the F_n immobilization flux:
+- Fraction ζ of F_n's immobilization goes to F_i instead
+- Fraction (1-ζ) stays as F_n
 
-Net immobilization to F_n (mobile → non-insulated):
-    η · (β_n(T)·Π - α_n(T)·Π^δ) · F_n
+MATLAB (single_aggregate_beta.m, lines 389-390):
+    immobil_i = α_i·Π·F_i + ζ·α_n·Π·F_n
+    immobil_n = (1-ζ)·α_n·Π·F_n
 
-Conversion respiration (CRITICAL: uses abs()):
-    (1-η) · |[(β_i·Π - α_i·Π^δ)·F_i + (β_n·Π - α_n·Π^δ)·F_n]|
+Generalized with mobilization (Falconer's β terms and δ exponent):
+    net_i = η·(β_i·Π - α_i·Π^δ)·F_i
+    net_n = η·(β_n·Π - α_n·Π^δ)·F_n
+    immobil_i = net_i + ζ·net_n
+    immobil_n = (1-ζ)·net_n
+
+Source terms (reactions.jl):
+    S_Fi = immobil_i - R_rec_F
+    S_Fn = immobil_n               (no separate insulation drain!)
+    S_Fm = Γ_F - immobil_i - immobil_n - Resp_F_conv
 
 # Arguments
 - `F_i`, `F_n`, `F_m`: Three fungal pools [μg/mm³]
 - `Π`: Mobile-to-immobile ratio (from Pi_protected) [-]
 - `α_i_T`, `α_n_T`: Mobilization rates at current T [1/day]
 - `β_i_T`, `β_n_T`: Immobilization rates at current T [1/day]
-- `ζ_T`: Insulation rate at current T [1/day]
+- `ζ_T`: Insulation splitting fraction at current T [-] (NOT a rate!)
 - `δ`: Mobilization exponent [-] (δ > 1)
 - `η`: Conversion efficiency [-] (η < 1)
 - `ε_F`: Regularization for Π [μg/mm³]
 
 # Notes
 - **CRITICAL**: Resp_F_conv uses abs() (MANUSCRIPT_CHANGES #2)
+- **CRITICAL**: ζ is a splitting fraction, NOT an independent sink
+  (see julia_falconer_deviations.md, Deviation #2)
 - When Π is large: immobilization dominates (β·Π > α·Π^δ)
 - When Π is small: mobilization dominates (α·Π^δ > β·Π)
 - Conversion cost (1-η) applies to both directions
@@ -306,9 +317,6 @@ Conversion respiration (CRITICAL: uses abs()):
 function fungal_transitions(F_i::Real, F_n::Real, F_m::Real, Π::Real,
                            α_i_T::Real, α_n_T::Real, β_i_T::Real, β_n_T::Real,
                            ζ_T::Real, δ::Real, η::Real, ε_F::Real)
-    # Insulation: F_n → F_i (no conversion cost)
-    insulation = ζ_T * F_n
-
     # Net transition rates (positive = immobilization, negative = mobilization)
     Π_delta = Π^δ
     net_i = (β_i_T * Π - α_i_T * Π_delta) * F_i
@@ -318,10 +326,15 @@ function fungal_transitions(F_i::Real, F_n::Real, F_m::Real, Π::Real,
     trans_i = η * net_i
     trans_n = η * net_n
 
+    # ζ splits trans_n: fraction ζ goes to F_i, fraction (1-ζ) stays as F_n
+    # (Falconer 2005/2008, MATLAB lines 389-390)
+    immobil_i = trans_i + ζ_T * trans_n
+    immobil_n = (1.0 - ζ_T) * trans_n
+
     # Conversion respiration: CRITICAL abs() for mobilization
     # When mobilization dominates (net < 0), respiration is still positive
     Resp_F_conv = (1.0 - η) * abs(net_i + net_n)
 
-    (trans_i = trans_i, trans_n = trans_n, insulation = insulation,
+    (immobil_i = immobil_i, immobil_n = immobil_n,
      Resp_F_conv = Resp_F_conv)
 end

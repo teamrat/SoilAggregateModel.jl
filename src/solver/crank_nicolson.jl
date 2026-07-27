@@ -18,15 +18,25 @@ end
 
 """
     crank_nicolson_step!(u, D, dt_half, r_grid, h, lower, diag, upper, rhs,
-                         bc_inner, bc_outer, flux_inner=0.0, value_outer=0.0)
+                         bc_inner, bc_outer, flux_inner=0.0, value_outer=0.0;
+                         theta=0.5)
 
-Perform one Crank-Nicolson diffusion half-step for a single species.
+Perform one diffusion half-step for a single species using a θ-method.
 
 Solves the spherical diffusion equation with spatially-varying diffusion coefficient D(r):
     ∂u/∂t = (1/r²) × ∂/∂r[r² × D × ∂u/∂r]
 
-Uses Crank-Nicolson time integration (second-order accurate):
-    u^{n+1} - u^n = (Δt/4) × [L[u^n] + L[u^{n+1}]]
+Uses the θ-method for time integration:
+    u^{n+1} - u^n = dt_half × [(1-θ) × L[u^n] + θ × L[u^{n+1}]]
+
+- `theta=0.5`: Crank-Nicolson (2nd-order, but violates max principle for Fo > 1)
+- `theta=1.0`: Backward Euler (1st-order, unconditionally monotone)
+
+For O₂ with Fo ≈ 42,600 >> 1, use `theta=1.0` (Backward Euler). CN with Fo >> 1
+produces a "reflection about steady-state" operator: CN(u) ≈ 2×SS - u. Combined
+with Strang splitting D(dt/2)→R(dt)→D(dt/2), this inverts the sign of the reaction
+term, causing O₂ to *increase* by the amount reactions depleted it each step.
+Backward Euler projects to steady state for large Fo, eliminating this artifact.
 
 where L is the spherical Laplacian operator discretized as:
     L_i = (1/r_i² h²) × [r_{i+1/2}² D_{i+1/2} (u_{i+1} - u_i)
@@ -46,6 +56,7 @@ where L is the spherical Laplacian operator discretized as:
 - `bc_outer::BoundaryCondition`: Outer boundary condition type
 - `flux_inner::Real=0.0`: Flux at inner boundary [μg/mm²/day] (if bc_inner == neumann_flux)
 - `value_outer::Real=0.0`: Value at outer boundary (if bc_outer == dirichlet)
+- `theta::Real=0.5`: Implicitness parameter (0.5=CN, 1.0=BE)
 
 # Boundary conditions
 Inner boundary (i=0):
@@ -70,7 +81,8 @@ function crank_nicolson_step!(u::Vector{Float64}, D::Vector{Float64},
                               lower::Vector{Float64}, diag::Vector{Float64},
                               upper::Vector{Float64}, rhs::Vector{Float64},
                               bc_inner::BoundaryCondition, bc_outer::BoundaryCondition,
-                              flux_inner::Real=0.0, value_outer::Real=0.0)
+                              flux_inner::Real=0.0, value_outer::Real=0.0;
+                              theta::Real=0.5)
     n = length(u)
 
     # === Step 1: Compute explicit Laplacian L[u^n] and build RHS ===
@@ -129,22 +141,24 @@ function crank_nicolson_step!(u::Vector{Float64}, D::Vector{Float64},
                                           r_half_minus * r_half_minus * D_half_minus * (u[i] - u[i-1]))
         end
 
-        # RHS: u^n + (dt/4) × L[u^n]
-        # Note: dt_half = Δt/2, so dt/4 = dt_half/2
-        rhs[i] = u[i] + 0.5 * dt_half * L_explicit
+        # RHS: u^n + (1-θ) × dt_half × L[u^n]
+        # theta=0.5 → CN: (1-0.5)*dt_half = dt_half/2
+        # theta=1.0 → BE: (1-1.0)*dt_half = 0  (no explicit term)
+        rhs[i] = u[i] + (1.0 - theta) * dt_half * L_explicit
     end
 
     # === Step 2: Build implicit tridiagonal matrix ===
-    # LHS: u^{n+1} - (dt/4) × L[u^{n+1}] = rhs
-    # Rearranges to: [I - (dt/4)×L] × u^{n+1} = rhs
+    # LHS: u^{n+1} - θ × dt_half × L[u^{n+1}] = rhs
+    # Rearranges to: [I - θ×dt_half×L] × u^{n+1} = rhs
     # This gives tridiagonal system: a_i × u_{i-1} + b_i × u_i + c_i × u_{i+1} = rhs_i
 
     @inbounds for i in 1:n
         r_i = r_grid[i]
         r_i_sq = r_i * r_i
         inv_r_sq_h_sq = 1.0 / (r_i_sq * h * h)
-        # Note: dt_half = Δt/2, so dt/4 = dt_half/2
-        coeff = -0.5 * dt_half * inv_r_sq_h_sq
+        # theta × dt_half is the implicit weighting
+        # theta=0.5 → CN: 0.5*dt_half; theta=1.0 → BE: 1.0*dt_half
+        coeff = -theta * dt_half * inv_r_sq_h_sq
 
         if i == 1
             # Inner boundary

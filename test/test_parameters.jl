@@ -34,8 +34,8 @@ Tests for parameters.jl
     @test 0.0 < bio.η_conv <= 1.0
     @test 0.0 < bio.γ <= 1.0
 
-    # Protection parameters should be small
-    @test bio.ε_F < 1e-6
+    # Protection parameters should be small (ε_F = 1e-4 for numerical stability)
+    @test bio.ε_F ≈ 1e-4
     @test bio.ε_maoc > 0.0
 
     # POM parameters

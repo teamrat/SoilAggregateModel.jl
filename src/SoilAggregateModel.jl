@@ -33,6 +33,7 @@ include("temperature/henry.jl")
 # Physics
 include("physics/water_retention.jl")
 include("physics/effective_diffusion.jl")
+include("physics/initial_conditions.jl")
 
 # Math utilities
 include("math_utils.jl")
@@ -68,10 +69,10 @@ include("postprocessing/radial_profiles.jl")
 
 # Exports
 export BiologicalProperties, SoilProperties
+export InitialConditions
 export AggregateState, OutputRecord
 export GridInfo, ParameterSet, SimulationResult, IntegratedPools
 export run_aggregate
 export compute_r_agg, integrated_pools, carbon_balance_table, radial_profiles
 export aqueous_concentrations, maoc_equilibrium, respiration_rates, carbon_use_efficiency, co2_flux
-
 end  # module SoilAggregateModel
