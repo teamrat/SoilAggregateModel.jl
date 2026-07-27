@@ -1,5 +1,10 @@
 # Fixed dt test for 365 days
 # This will take 365,000 steps — feasible
+
+## Setup
+using Pkg
+Pkg.activate(@__DIR__() * "/..")
+
 using SoilAggregateModel
 import SoilAggregateModel: diffusion_step!, reaction_step!, GridInfo
 import SoilAggregateModel: create_initial_state, Workspace

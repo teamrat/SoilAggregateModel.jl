@@ -3,6 +3,10 @@ Test conservation with the full adaptive timestepper (run_aggregate)
 to see if the 0.014%/year leak appears in the adaptive stepping logic.
 """
 
+## Setup
+using Pkg
+Pkg.activate(@__DIR__() * "/..")
+
 using SoilAggregateModel
 
 # Standard setup

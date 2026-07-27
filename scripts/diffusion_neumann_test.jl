@@ -1,3 +1,7 @@
+## Setup
+using Pkg
+Pkg.activate(@__DIR__() * "/..")
+
 using SoilAggregateModel
 import SoilAggregateModel: crank_nicolson_step!, neumann_flux, neumann_zero, GridInfo
 
