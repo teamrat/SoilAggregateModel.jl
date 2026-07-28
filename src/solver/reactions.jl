@@ -104,11 +104,15 @@ function compute_source_terms(C::Real, B::Real, F_n::Real, F_m::Real, F_i::Real,
     # Temperature-dependent rates
     r_F_max_T = bio.r_F_max * temp_cache.f_fun
     μ_F_T = bio.μ_F * temp_cache.f_fun
+    # α = immobilization (gain), β = mobilization (loss) — Falconer naming
     α_i_T = bio.α_i * temp_cache.f_fun
     α_n_T = bio.α_n * temp_cache.f_fun
     β_i_T = bio.β_i * temp_cache.f_fun
     β_n_T = bio.β_n * temp_cache.f_fun
-    ζ_T = bio.ζ * temp_cache.f_fun
+    # NOTE: ζ is a dimensionless SPLITTING FRACTION, not a rate, so scaling it
+    # by an Arrhenius factor is dimensionally wrong and can drive it above 1
+    # (which would flip the sign of immobil_n). Clamped until this is resolved.
+    ζ_T = min(bio.ζ * temp_cache.f_fun, 1.0)
 
     # Protection ratio
     Π_val = Pi_protected(F_m, F_i, F_n, bio.ε_F)

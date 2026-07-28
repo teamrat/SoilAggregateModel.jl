@@ -33,6 +33,17 @@ end
     n = 100
     state = AggregateState(n)
 
+    # Fill convention (see types.jl): unset pools are NaN so that a path which
+    # skips initialisation fails loudly instead of reading as empty-but-valid.
+    @test all(isnan, state.C)
+    @test all(isnan, state.B)
+    @test all(isnan, state.F_n)
+    @test all(isnan, state.F_m)
+    @test all(isnan, state.O)
+    @test all(isnan, state.F_i)
+    @test all(isnan, state.E)
+    @test all(isnan, state.M)
+
     # Check all vectors have correct length
     @test length(state.C) == n
     @test length(state.B) == n
@@ -85,6 +96,13 @@ end
     ws = Workspace(n)
 
     # Tridiagonal arrays
+    # Same convention for the scratch arrays: a zero diffusivity is a
+    # physically meaningful value and would stop transport silently.
+    @test all(isnan, ws.θ)
+    @test all(isnan, ws.D_C)
+    @test all(isnan, ws.D_Fm)
+    @test all(isnan, ws.D_O)
+
     @test length(ws.lower) == n - 1
     @test length(ws.diag) == n
     @test length(ws.upper) == n - 1

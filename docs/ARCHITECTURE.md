@@ -125,18 +125,33 @@ R_P scales with temperature via ε_{a,P} (POM activation energy, see Section 5).
 
 ### 4.3 Source/Sink Terms (per node)
 
-See manuscript for exact definitions. Summary:
+**`docs/REFERENCE.md` §14 is the single source for these.** The block below is a
+summary; if it disagrees with §14, §14 wins, because §14 is transcribed from
+`src/solver/reactions.jl` and re-verified against it.
 
 ```
-S_C  = −R_B − R_F + R_rec − J_M·(θ + ρ_b·k_d)/k_d
+S_P  = −R_P
+S_C  = −R_B − R_F + R_rec − J_M
 S_B  = Γ_B − R_rec,B
-S_Fn = η(β_n·Π − α_n·Π^δ)·F_n − ζ·F_n
-S_Fm = Γ_F − η(β_i·Π − α_i·Π^δ)·F_i − η(β_n·Π − α_n·Π^δ)·F_n − Resp_F_conv
-S_Fi = ζ·F_n + η(β_i·Π − α_i·Π^δ)·F_i − R_rec,F
+S_Fi = immobil_i − R_rec,F
+S_Fn = immobil_n
+S_Fm = Γ_F − immobil_i − immobil_n − Resp_F_conv
 S_E  = Γ_E − R_rec,E
 S_M  = J_M
-S_O  = −α_O·(Resp_B + Resp_F + Resp_F_conv)
+S_O  = −α_O·(Resp_B + Resp_F + Resp_F_conv) / (θ + K_H(T)·θ_a)
 ```
+
+where `immobil_i`, `immobil_n` and `Resp_F_conv` come from
+`fungal_transitions` (`src/biology/fungi.jl`) — see REFERENCE §14 for their
+definitions. **There is no separate `±ζ·F_n` insulation term**: ζ is a
+dimensionless splitting fraction applied inside `fungal_transitions`, not a
+one-way drain rate.
+
+*Corrected 2026-07-28. This block previously carried the inverted α/β
+convention, the deleted `ζ·F_n` drain, the pre-audit
+`−J_M·(θ+ρ_b·k_d)/k_d` coupling (REFERENCE §26 erratum 2, fixed in the code in
+February), and an `S_O` missing its O₂ capacity divisor. Four stale claims in
+eight lines, in the document `CLAUDE.md` names as authoritative.*
 
 Cumulative CO₂ (diagnostic, not a state variable):
 ```
@@ -434,14 +449,14 @@ struct BiologicalProperties
     F_i_min::Float64        # Minimum viable insulated biomass [μg/mm³]
     Ea_F::Float64           # Activation energy [J/mol] — shared by ALL fungal rates
 
-    # --- Fungal transitions ---
-    α_i::Float64            # Mobilization rate, insulated [1/day]
-    α_n::Float64            # Mobilization rate, non-insulated [1/day]
-    β_i::Float64            # Immobilization rate, insulated [1/day]
-    β_n::Float64            # Immobilization rate, non-insulated [1/day]
-    delta::Float64          # Mobilization exponent (δ > 1) [-]
+    # --- Fungal transitions (Falconer naming; see REFERENCE §3.3, §5a) ---
+    α_i::Float64            # IMMOBILIZATION rate → insulated [1/day] (gain; carries δ)
+    α_n::Float64            # IMMOBILIZATION rate → non-insulated [1/day] (gain; carries δ)
+    β_i::Float64            # MOBILIZATION rate from insulated [1/day] (loss; linear in Π)
+    β_n::Float64            # MOBILIZATION rate from non-insulated [1/day] (loss; linear in Π)
+    delta::Float64          # Immobilization exponent — Falconer's θ [-]
     η_conv::Float64         # Conversion efficiency [-]
-    ζ::Float64              # Insulation rate F_n → F_i [1/day]
+    ζ::Float64              # Insulation SPLITTING FRACTION on the F_n tendency [-] — NOT a rate
     λ::Float64              # Fraction of F_n at uptake surfaces [-]
     D_Fn0::Float64          # Hyphal extension diffusivity at T_ref [mm²/day]
     D_Fm0::Float64          # Internal translocation rate at T_ref [mm²/day]

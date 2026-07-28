@@ -7,9 +7,11 @@
 
 Aqueous-phase concentrations at each node.
 
-Computes:
-- C_aq[i] = C[i] / (1 + k_d·ρ_b)
-- O_aq[i] = O[i]·θ[i] / (θ[i] + K_H(T)·θ_a[i])
+Computes, using the SAME definitions as `compute_source_terms`
+(`src/solver/reactions.jl:75,77`) — these must not diverge, or the reported
+concentrations are not the ones the solver reacted with:
+- C_aq[i] = C[i] / (θ[i] + ρ_b·k_d_eq)
+- O_aq[i] = O[i]                        (state.O is already aqueous)
 
 # Arguments
 - `record::OutputRecord`: Snapshot at a single time
@@ -24,9 +26,10 @@ NamedTuple with:
 
 # Notes
 - C_aq accounts for sorption retardation (bulk-to-aqueous conversion)
-- O_aq accounts for gas-water partitioning via Henry's law
-- Uses K_H(T) from temperature-dependent Henry's law constant
-- Recomputes θ, θ_a at record.t using environmental forcings
+- O_aq is the identity: since the O_total→C_aq switch the state variable IS
+  the aqueous concentration, and the gas-water capacity `θ + K_H(T)·θ_a`
+  appears on the O₂ SOURCE term (`reactions.jl:166`), not on the concentration
+- Recomputes θ at record.t using environmental forcings
 
 # Example
 ```julia
@@ -43,19 +46,16 @@ function aqueous_concentrations(record::OutputRecord, grid::GridInfo,
     # Recompute environmental conditions at this time
     env_vals = _prepare_environment(record, grid, params, env)
     θ = env_vals.θ
-    θ_a = env_vals.θ_a
-    K_H = env_vals.f_T.K_H_O
 
     # Allocate output vectors
     C_aq = Vector{Float64}(undef, n)
     O_aq = Vector{Float64}(undef, n)
 
-    # Retardation factor (spatially uniform)
-    retardation = 1.0 + soil.k_d_eq * soil.ρ_b
-
+    # Retardation is θ-dependent, so it is formed per node.
+    # Matches reactions.jl:75 exactly: C_aq = C / (θ + ρ_b·k_d_eq).
     # Compute at each node
     for i in 1:n
-        C_aq[i] = record.state.C[i] / retardation
+        C_aq[i] = record.state.C[i] / (θ[i] + soil.ρ_b * soil.k_d_eq)
         O_aq[i] = record.state.O[i]  # state.O is already C_aq since the O_total→C_aq switch
     end
 
@@ -184,25 +184,17 @@ function respiration_rates(record::OutputRecord, grid::GridInfo,
         M = record.state.M[i]
         O = record.state.O[i]
 
-        # Compute all source terms (includes all respiration components)
-        src = compute_source_terms(C, B, F_n, F_m, F_i, E, M, O,
-                                   θ[i], θ_a[i], ψ, bio, soil, f_T)
-
-        # Extract respiration components from compute_source_terms
-        # We need to recompute individual components since SourceTerms only stores Resp_total
-        # Let me check what compute_source_terms actually computes...
-
-        # From reactions.jl, I can see:
-        # Resp_B_val = Resp_B(R_Bb_val, R_diff, Y_B_val)
-        # Resp_F_val = Resp_F(R_F_val, Y_F_val)
-        # Resp_total_val = Resp_B_val + Resp_F_val + trans.Resp_F_conv
-
-        # But SourceTerms struct only has Resp_total, not the components
-        # I need to recompute the components manually
-
+        # `SourceTerms` carries only Resp_total, so the three components are
+        # recomputed here from the same functions the solver calls, with the
+        # same C_aq / O_aq / ζ_T definitions. `test_postprocessing.jl` asserts
+        # the sum against `compute_source_terms(...).Resp_total` — if that
+        # assertion fails, this block has drifted from reactions.jl.
         # Compute C_aq, O_aq
         C_aq = C / (θ[i] + soil.ρ_b * soil.k_d_eq)
-        O_aq = O * θ[i] / (θ[i] + f_T.K_H_O * θ_a[i])
+        # state.O IS the aqueous concentration (O_total -> C_aq switch);
+        # reactions.jl:77 is `O_aq = O`. Post-processing MUST use the same
+        # definition or it reports rates the solver never used.
+        O_aq = O
 
         # Bacterial respiration
         r_B_max_T = bio.r_B_max * f_T.f_bac
@@ -224,7 +216,7 @@ function respiration_rates(record::OutputRecord, grid::GridInfo,
         α_n_T = bio.α_n * f_T.f_fun
         β_i_T = bio.β_i * f_T.f_fun
         β_n_T = bio.β_n * f_T.f_fun
-        ζ_T = bio.ζ * f_T.f_fun
+        ζ_T = min(bio.ζ * f_T.f_fun, 1.0)   # clamped, as reactions.jl:115
         Π_val = Pi_protected(F_m, F_i, F_n, bio.ε_F)
         trans = fungal_transitions(F_i, F_n, F_m, Π_val, α_i_T, α_n_T, β_i_T, β_n_T,
                                    ζ_T, bio.delta, bio.η_conv, bio.ε_F)
@@ -306,7 +298,10 @@ function carbon_use_efficiency(record::OutputRecord, grid::GridInfo,
 
         # Compute C_aq, O_aq
         C_aq = C / (θ[i] + soil.ρ_b * soil.k_d_eq)
-        O_aq = O * θ[i] / (θ[i] + f_T.K_H_O * θ_a[i])
+        # state.O IS the aqueous concentration (O_total -> C_aq switch);
+        # reactions.jl:77 is `O_aq = O`. Post-processing MUST use the same
+        # definition or it reports rates the solver never used.
+        O_aq = O
 
         # Bacterial CUE
         r_B_max_T = bio.r_B_max * f_T.f_bac

@@ -17,6 +17,8 @@ a simulation.
 - `s_M`: MAOC saturation ratio [-] (fraction of mineral capacity occupied)
 - `f_bact`: Bacterial C as fraction of total SOC [-]
 - `f_fungi`: Fungal C as fraction of total SOC [-]
+- `f_insulated`: Fraction of native fungal C that starts insulated (F_i) [-];
+  the remainder starts as non-insulated hyphae (F_n)
 - `f_eps`: EPS C as fraction of total SOC [-]
 - `T_0`: Initial temperature [K]
 - `ψ_0`: Initial matric potential [kPa]
@@ -28,7 +30,9 @@ a simulation.
 - Microbial fractions (f_bact, f_fungi, f_eps) are literature defaults;
   override with soil-specific measurements when available
 - Typical ranges: f_bact ∈ [0.005, 0.03], f_fungi ∈ [0.005, 0.05],
-  f_eps ∈ [0.001, 0.01], s_M ∈ [0.2, 0.8]
+  f_eps ∈ [0.001, 0.01], s_M ∈ [0.2, 0.8], f_insulated ∈ [0.2, 0.8]
+- `f_insulated = 1.0` reproduces the pre-2026-07 behaviour exactly (all fungal
+  C in F_i, F_n seeded at bio.F_n_min) and is useful as a control
 
 # Example
 ```julia
@@ -44,6 +48,7 @@ struct InitialConditions
     s_M::Float64            # MAOC saturation ratio [-]
     f_bact::Float64         # Bacterial C fraction of SOC [-]
     f_fungi::Float64        # Fungal C fraction of SOC [-]
+    f_insulated::Float64    # Fraction of fungal C starting as F_i [-]
     f_eps::Float64          # EPS C fraction of SOC [-]
     T_0::Float64            # Initial temperature [K]
     ψ_0::Float64            # Initial matric potential [kPa]
@@ -63,12 +68,17 @@ function InitialConditions(;
     s_M = 0.4,              # 40% of mineral capacity occupied
     f_bact = 0.01,          # 1% of SOC in bacteria
     f_fungi = 0.01,         # 1% of SOC in fungi
+    f_insulated = 0.5,      # half of native fungal C starts insulated
     f_eps = 0.005,          # 0.5% of SOC in EPS
     T_0 = 293.15,           # 20°C
     ψ_0 = -29.0,            # field capacity
     O2_gas = 0.2785         # ~21% atmospheric O₂
 )
-    InitialConditions(SOC, s_M, f_bact, f_fungi, f_eps, T_0, ψ_0, O2_gas)
+    if !(0.0 ≤ f_insulated ≤ 1.0)
+        error("f_insulated must lie in [0, 1]; got $(f_insulated)")
+    end
+    InitialConditions(SOC, s_M, f_bact, f_fungi, f_insulated, f_eps,
+                      T_0, ψ_0, O2_gas)
 end
 
 """
@@ -265,7 +275,8 @@ Create initial state by partitioning measured SOC into model pools.
 # Algorithm (see soc_partitioning.md)
 1. Convert SOC to volumetric: SOC_vol = SOC × ρ_b (fraction × µg/mm³ = µg-C/mm³)
 2. Biotic pools: B, F_i, E from prescribed fractions of SOC
-3. F_n, F_m seeded at minimum viable concentrations
+3. Fungal C split between F_i and F_n by ic.f_insulated; F_m seeded at
+   minimum viable concentration
 4. MAOC capacity: M_max from texture (k_ma × f_clay_silt × ρ_b)
 5. C and M from iterative partition (thermodynamically consistent)
 6. O₂ from gas-total conversion
@@ -314,11 +325,37 @@ function create_initial_state(n::Int, bio::BiologicalProperties,
 
     # === Step 2: Biotic pools (analytical) ===
     B_0   = ic.f_bact  * SOC_vol
-    F_i_0 = ic.f_fungi * SOC_vol   # steady-state: all fungal C in F_i
     E_0   = ic.f_eps   * SOC_vol
 
-    # F_n and F_m: seeded at minimum viable (not from SOC fraction)
-    F_n_0 = bio.F_n_min
+    # Native fungal C is split between the insulated (F_i) and non-insulated
+    # (F_n) pools by ic.f_insulated.
+    #
+    # This split is a FREE INITIAL CONDITION, not a steady state. With
+    # F_m ≈ F_m_min the protection ratio Π = F_m/(F_i + F_n + ε_F) ≈ 0, so
+    # every transition rate vanishes and *any* partition is stationary. The
+    # previous code put 100% of fungal C in F_i and called it "steady state";
+    # that is one arbitrary choice among many, and it is the worst one:
+    #
+    #   1. Uptake is throttled. R_F ∝ (λ·F_i + F_n) with λ = 0.05, so all the
+    #      biomass sits in the pool with 5% uptake efficiency.
+    #   2. Π is suppressed from below. F_i is in the denominator of Π, so
+    #      loading F_i actively closes the only escape route.
+    #   3. F_n cannot bootstrap. Its only source term,
+    #         S_Fn = (1-ζ)·η·(α_n·Π^δ - β_n·Π)·F_n
+    #      is proportional to F_n itself, making F_n ≈ 0 an absorbing state.
+    #
+    # Together these pin F_n at its floor for the whole simulation: with the
+    # defaults (α_n = 0.15, β_n = 0, δ = 1, η = 0.8, ζ = 0.2) the growth rate
+    # is (1-ζ)·η·α_n·Π ≈ 0.096·Π, and Π ≈ 0.03 gives an e-folding time of
+    # ~350 days against a 21-day incubation. No parameter choice within a
+    # defensible range escapes this; the partition has to change.
+    #
+    # Set f_insulated = 1.0 to recover the old behaviour exactly.
+    F_fungi_0 = ic.f_fungi * SOC_vol
+    F_i_0 = ic.f_insulated * F_fungi_0
+    F_n_0 = max((1.0 - ic.f_insulated) * F_fungi_0, bio.F_n_min)
+
+    # F_m: seeded at minimum viable (not from SOC fraction)
     F_m_0 = bio.F_m_min
 
     # === Step 3: Water content at ψ_0 ===

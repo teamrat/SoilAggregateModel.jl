@@ -1,5 +1,18 @@
 # postprocess_dataframe.jl
-# DataFrame generators and population-sweep driver for simulation results
+# DataFrame generators and population-sweep driver for simulation results.
+#
+# This file is PACKAGING, not model logic. It turns SimulationResult objects and
+# sweep results into tables. The quantities themselves are computed in the
+# package:
+#
+#   integrated_pools, co2_flux, radial_profiles  -> src/postprocessing/
+#   population_statistics, aggregate_mass,       -> src/postprocessing/population.jl
+#   sieve_class
+#   domain_tessellation, pom_population          -> src/physics/tessellation.jl
+#
+# It lives outside src/ only because the package does not depend on DataFrames
+# or CSV. Nothing that a second experiment could reuse belongs here — if a new
+# quantity is being defined rather than tabulated, it goes in src/.
 using DataFrames
 
 """
@@ -354,160 +367,133 @@ end
 
 
 # ============================================================
-# Population-level outputs
+# Population-level outputs — DataFrame adapter
 # ============================================================
-# These functions take the combined DataFrame from run_diameter_sweep()
-# and a POM number distribution to produce population-weighted quantities
-# that can be compared directly with experimental data.
+# The arithmetic lives in src/postprocessing/population.jl. What is left here is
+# packaging: pull the per-diameter time series out of the sweep DataFrame, hand
+# plain matrices to `population_statistics`, and name the resulting columns.
 
 """
     population_outputs(df_sweep::DataFrame, n_dist::Vector{Float64};
-                       ω::Real=1.0,
-                       sieve_sizes::Vector{Float64}=Float64[]) -> DataFrame
+                       sieve_sizes, mineral_class_fractions,
+                       class_nominal_mm, class_labels,
+                       soil_volume_mm3, ρ_b, f_C_POM) -> DataFrame
 
-Compute population-weighted outputs from a diameter sweep.
+DataFrame wrapper around [`population_statistics`](@ref).
 
-Given the per-diameter time-series from `run_diameter_sweep()` and a POM
-number distribution, computes:
-  - Mean Weight Diameter (MWD)
-  - Total CO₂ flux and cumulative CO₂ (weighted by POM count, corrected for overlap)
-  - Wet aggregate stability (fraction of soil volume in aggregates above
-    specified sieve sizes)
+This function does no physics. It extracts `D_agg_mm`, `POM`, `CO2_cumulative`,
+`CO2_flux` and `r_0_mm` from a `run_diameter_sweep()` result into matrices,
+calls `population_statistics`, and builds the output table. Every definition —
+aggregate mass, sieve binning, the fixed-weight MWD, the ω convention — is
+documented at the `src/` function and in `docs/REFERENCE.md` §5c.
 
 # Arguments
-- `df_sweep::DataFrame`: Output from `run_diameter_sweep()`.
-  Must contain columns: `diam_mm`, `time_days`, `D_agg_mm`, `CO2_cumulative`, `CO2_flux`
-- `n_dist::Vector{Float64}`: Number of POM particles per size class.
-  Length must match the number of unique diameters in `df_sweep`.
-  This is a *number* distribution, not mass — each element is the count
-  of POM fragments of that diameter class.
+- `df_sweep::DataFrame`: output of `run_diameter_sweep()`. Must carry
+  `diam_mm`, `time_days`, `D_agg_mm`, `POM`, `CO2_cumulative`, `CO2_flux`,
+  `r_0_mm`.
+- `n_dist::Vector{Float64}`: POM particle count per size class, in
+  `soil_volume_mm3`. Ascending by diameter, matching `sort(unique(diam_mm))`.
 
 # Keyword Arguments
-- `ω::Real`: Domain overlap correction factor (default: 1.0 = no overlap).
-  When model domains are larger than packing cells (f_domain > f_pack),
-  ω = (f_domain/f_pack)³ corrects for double-counted background SOC.
-  See `domain_tessellation.md` for derivation.
-- `sieve_sizes::Vector{Float64}`: Sieve apertures [mm] for wet aggregate
-  stability calculation (default: empty = skip). Common values: [0.25, 0.5, 1.0, 2.0].
+Passed straight through to `population_statistics`, except `class_labels`:
+
+- `sieve_sizes`: sieve apertures [mm], ascending. `k` sieves → `k+1` classes.
+- `mineral_class_fractions`: the soil's own mineral mass split across those
+  classes. Required for whole-sample class shares; see the `src/` docstring.
+- `class_nominal_mm`: nominal diameter per class, enabling a fixed-weight MWD.
+- `cell_volume_mm3`: packing-cell volume per size class, from `pom_population`
+  (`V_pack`). Enables the `max_cell_occ` column.
+- `class_labels`: names for the class columns, ascending. The sieve series is a
+  property of the assay, so the assay names its own classes. Without labels the
+  columns are `pct_class1..N`.
+- `soil_volume_mm3`, `ρ_b`, `f_C_POM`: reference sample volume [mm³], bulk
+  density [µg/mm³] and residue carbon fraction [-].
+
+There is **no `ω` argument.** ω rescales background-carbon concentration inside
+an oversized domain and is applied once, at initialization. The sums here are
+built from physical counts and physical diameters and are already per-sample
+totals; dividing by ω again would understate the amendment by that factor.
 
 # Returns
-- `DataFrame` with one row per output time, columns:
-  - `time_days`: Time [days]
-  - `MWD_mm`: Mean weight diameter [mm]
-  - `CO2_total`: Population total cumulative CO₂ [μg-C] (overlap-corrected)
-  - `CO2_flux_total`: Population total CO₂ flux [μg-C/day] (overlap-corrected)
-  - `WAS_X_XXmm`: (optional) Fraction of aggregate volume above each sieve size [-]
+`DataFrame`, one row per output time: `time_days`, `MWD_agg_only`, `f_agg`,
+`f_agg_vol`, `POM_mass_frac`, `shell_mm`, `CO2_total`, `CO2_flux_total`, one
+`pct_<label>` column per sieve class in ascending order, and
+`MWD_fixed_weight_mm` when `class_nominal_mm` is supplied.
 
-# Physics
-
-**Mean Weight Diameter:**
-  MWD(t) = Σᵢ nᵢ · mᵢ · Dᵢ(t) / Σᵢ nᵢ · mᵢ
-
-  where nᵢ = number of POM particles in size class i,
-        mᵢ = mass of one aggregate of size class i ∝ D_agg,i(t)³,
-        Dᵢ(t) = aggregate diameter at time t.
-
-  This is the mass-weighted mean of aggregate diameters — the standard
-  experimental measure from wet sieving.
-
-**Wet Aggregate Stability (WAS):**
-  WAS(s, t) = Σᵢ nᵢ · Vᵢ(t) · 𝟙[Dᵢ(t) > s] / Σᵢ nᵢ · Vᵢ(t)
-
-  where Vᵢ(t) = (π/6)·Dᵢ(t)³ is the aggregate volume,
-        s is the sieve aperture, and 𝟙 is the indicator function.
-
-  MWD and WAS are mass-fraction-based and do not require ω correction.
-
-**Total CO₂:**
-  CO₂_total(t) = Σᵢ nᵢ · CO₂ᵢ(t) / ω
-
-  Count-weighted sum of per-aggregate cumulative respiration, corrected
-  for domain overlap when ω > 1.
-
-# Example
-```julia
-# Domain tessellation with overlap correction
-f_pack = 5.0   # from experimental POM input
-f_domain = 10.0  # minimum for numerical resolution
-ω = (f_domain / f_pack)^3  # = 8.0
-
-df_pop = population_outputs(df_sweep, N_POM; ω=ω, sieve_sizes=[0.25, 1.0])
-```
+The `pct_*` columns sum to 100 when `mineral_class_fractions` is given and to
+`f_agg·100` when it is not. They are non-overlapping ranges, not cumulative
+"above sieve X" fractions — the running sum from the top gives those.
 """
 function population_outputs(df_sweep::DataFrame, n_dist::Vector{Float64};
-                            ω::Real=1.0,
-                            sieve_sizes::Vector{Float64}=Float64[])
+                            sieve_sizes::Vector{Float64}=Float64[],
+                            mineral_class_fractions::Union{Nothing,Vector{Float64}}=nothing,
+                            class_nominal_mm::Union{Nothing,Vector{Float64}}=nothing,
+                            class_labels::Union{Nothing,Vector{String}}=nothing,
+                            cell_volume_mm3::Union{Nothing,Vector{Float64}}=nothing,
+                            soil_volume_mm3::Real=1.0e6,
+                            ρ_b::Real=1300.0,
+                            f_C_POM::Real=0.443)
 
-    # --- Validate inputs ---
-    diams = sort(unique(df_sweep.diam_mm))
+    diams   = sort(unique(df_sweep.diam_mm))
     n_sizes = length(diams)
     @assert length(n_dist) == n_sizes "n_dist has $(length(n_dist)) entries but sweep has $(n_sizes) diameters"
 
-    # Get the common time grid from the first diameter
-    times = df_sweep[df_sweep.diam_mm .== diams[1], :time_days]
+    # Common time grid, taken from the first diameter
+    times   = df_sweep[df_sweep.diam_mm .== diams[1], :time_days]
     n_times = length(times)
 
-    # --- Extract per-diameter time-series into arrays ---
-    # D_agg[i, t], CO2[i, t], CO2_flux[i, t]
+    n_class = length(sieve_sizes) + 1
+    if class_labels !== nothing
+        @assert length(class_labels) == n_class "class_labels must have length(sieve_sizes)+1 = $(n_class)"
+    end
+
+    # --- Column extraction: [size, time] matrices -------------------------
     D_agg    = Matrix{Float64}(undef, n_sizes, n_times)
+    POM      = Matrix{Float64}(undef, n_sizes, n_times)
     CO2_cum  = Matrix{Float64}(undef, n_sizes, n_times)
     CO2_flux = Matrix{Float64}(undef, n_sizes, n_times)
+    r_0      = Vector{Float64}(undef, n_sizes)
 
     for (i, d) in enumerate(diams)
         mask = df_sweep.diam_mm .== d
         D_agg[i, :]    = df_sweep[mask, :D_agg_mm]
+        POM[i, :]      = df_sweep[mask, :POM]
         CO2_cum[i, :]  = df_sweep[mask, :CO2_cumulative]
         CO2_flux[i, :] = df_sweep[mask, :CO2_flux]
+        r_0[i]         = first(df_sweep[mask, :r_0_mm])
     end
 
-    # --- Compute population outputs at each time ---
-    MWD        = Vector{Float64}(undef, n_times)
-    CO2_total  = Vector{Float64}(undef, n_times)
-    flux_total = Vector{Float64}(undef, n_times)
+    # --- Physics ----------------------------------------------------------
+    stats = population_statistics(D_agg, POM, CO2_cum, CO2_flux, r_0, n_dist;
+                                  sieve_sizes             = sieve_sizes,
+                                  mineral_class_fractions = mineral_class_fractions,
+                                  class_nominal_mm        = class_nominal_mm,
+                                  cell_volume_mm3         = cell_volume_mm3,
+                                  soil_volume_mm3         = soil_volume_mm3,
+                                  ρ_b                     = ρ_b,
+                                  f_C_POM                 = f_C_POM)
 
-    # Preallocate WAS columns
-    WAS = Matrix{Float64}(undef, length(sieve_sizes), n_times)
-
-    for t in 1:n_times
-        # Aggregate volumes: V_i = (π/6) · D_i³
-        V = [(π / 6.0) * D_agg[i, t]^3 for i in 1:n_sizes]
-
-        # Mass of each size class (proportional to n_i × V_i)
-        mass = [n_dist[i] * V[i] for i in 1:n_sizes]
-        total_mass = sum(mass)
-
-        # MWD = Σ(n_i · V_i · D_i) / Σ(n_i · V_i)
-        if total_mass > 0.0
-            MWD[t] = sum(mass[i] * D_agg[i, t] for i in 1:n_sizes) / total_mass
-        else
-            MWD[t] = 0.0
-        end
-
-        # Total CO₂ = Σ(n_i · CO₂_i) / ω  (overlap correction)
-        CO2_total[t]  = sum(n_dist[i] * CO2_cum[i, t]  for i in 1:n_sizes)
-        flux_total[t] = sum(n_dist[i] * CO2_flux[i, t] for i in 1:n_sizes)
-
-        # WAS for each sieve size
-        for (s_idx, sieve) in enumerate(sieve_sizes)
-            # Volume above sieve: sum of n_i × V_i where D_i > sieve
-            # init=0.0 handles case where no aggregates exceed the sieve size
-            vol_above = sum(mass[i] for i in 1:n_sizes if D_agg[i, t] > sieve; init=0.0)
-            WAS[s_idx, t] = total_mass > 0.0 ? vol_above / total_mass : 0.0
-        end
-    end
-
-    # --- Build output DataFrame ---
+    # --- Packaging --------------------------------------------------------
     df = DataFrame(
         time_days      = times,
-        MWD_mm         = MWD,
-        CO2_total      = CO2_total,
-        CO2_flux_total = flux_total,
+        MWD_agg_only   = stats.MWD_agg_only,    # mass-weighted mean over aggregates
+        f_agg          = stats.f_agg,           # MASS fraction of sample that is aggregate
+        f_agg_vol      = stats.f_agg_vol,       # volume fraction (geometry check, keep < 0.6)
+        POM_mass_frac  = stats.POM_mass_frac,   # residue share of retained coarse mass
+        shell_mm       = stats.shell_thickness_mm,  # continuum check: compare vs sieve_sizes
+        # Worst per-class packing-cell occupancy. >= 1 means some size class has
+        # consumed more soil than it owns; the bulk mass balance would hide it.
+        max_cell_occ   = [maximum(view(stats.cell_occupancy, :, t)) for t in 1:length(times)],
+        CO2_total      = stats.CO2_total,
+        CO2_flux_total = stats.CO2_flux_total,
     )
 
-    # Add WAS columns with descriptive names: WAS_0_25mm, WAS_1_00mm, etc.
-    for (s_idx, sieve) in enumerate(sieve_sizes)
-        col_name = Symbol("WAS_$(replace(string(round(sieve, digits=2)), '.' => '_'))mm")
-        df[!, col_name] = WAS[s_idx, :]
+    for k in 1:n_class
+        nm = class_labels === nothing ? "pct_class$(k)" : "pct_" * class_labels[k]
+        df[!, Symbol(nm)] = stats.class_pct[k, :]
+    end
+    if class_nominal_mm !== nothing
+        df[!, :MWD_fixed_weight_mm] = stats.MWD_fixed_weight
     end
 
     return df

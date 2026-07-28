@@ -93,6 +93,39 @@ function van_genuchten(ψ::Real, α::Real, n::Real, θ_r::Real, θ_s::Real)
 end
 
 """
+    van_genuchten_inverse(θ::Real, α::Real, n::Real, θ_r::Real, θ_s::Real)
+
+Matric potential corresponding to a given water content — the inverse of
+[`van_genuchten`](@ref).
+
+# Formula
+    S_e = (θ - θ_r) / (θ_s - θ_r)
+    ψ   = -(S_e^(-1/m) - 1)^(1/n) / α,      m = 1 - 1/n
+
+# Arguments
+- `θ`: volumetric water content [-], must satisfy θ_r < θ ≤ θ_s
+- `α`: van Genuchten α [1/kPa]
+- `n`: van Genuchten n [-]
+- `θ_r`, `θ_s`: residual and saturated water content [-]
+
+# Returns
+- Matric potential ψ [kPa], ≤ 0. Returns 0.0 at saturation.
+
+# Use
+Experiments that specify water content or water-filled pore space rather than a
+potential (e.g. "60 % WFPS") need this to obtain the ψ the solver takes as a
+driver. Note the result depends on α, n, θ_r and θ_s, so it must be evaluated
+with the same soil the run will use.
+"""
+function van_genuchten_inverse(θ::Real, α::Real, n::Real, θ_r::Real, θ_s::Real)
+    θ >= θ_s && return 0.0
+    θ > θ_r || throw(ArgumentError("θ = $(θ) must exceed θ_r = $(θ_r)"))
+    m   = 1.0 - 1.0 / n
+    S_e = (θ - θ_r) / (θ_s - θ_r)
+    -((S_e^(-1.0/m) - 1.0)^(1.0/n)) / α
+end
+
+"""
     water_content(ψ::Real, E::Real, F_i::Real, soil::SoilProperties)
 
 Compute water content with EPS/fungal modification.

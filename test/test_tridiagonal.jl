@@ -18,6 +18,10 @@ Required tests for crank_nicolson.jl (from architecture review):
 """
 
 import SoilAggregateModel: thomas!, thomas, thomas_factorize!, thomas_solve!, is_diagonally_dominant
+import LinearAlgebra: Tridiagonal, cond   # independent reference for the solver.
+# NOTE: explicit import, NOT `using`. LinearAlgebra exports `diag`, and these
+# test files use `diag` as a local variable name throughout; runtests.jl
+# includes every test file into one scope, so a `using` here would collide.
 
 @testset "Thomas algorithm - simple systems" begin
     @testset "Diagonal system" begin
@@ -374,5 +378,44 @@ end
         upper_f = copy(upper)
         thomas_factorize!(lower_f, diag_f, upper_f)
         @inferred thomas_solve!(lower_f, diag_f, upper_f, copy(rhs))
+    end
+
+    # === Independent reference: dense linear solve ===
+    #
+    # Every other random-matrix test in this file compares the solver to itself: `thomas` is a copy-wrapper around `thomas!`, and
+    # `thomas_factorize!` + `thomas_solve!` execute the identical recurrence, so
+    # a common-mode error in the elimination is invisible to all of them.
+    # LinearAlgebra's `\` is a genuinely independent implementation.
+    @testset "Thomas vs dense solve (independent reference)" begin
+        for n in (3, 5, 20, 60)
+            for trial in 1:5
+                # Diagonally dominant, well conditioned
+                lower = randn(n-1)
+                upper = randn(n-1)
+                diag  = [abs(lower[max(i-1,1)]) + abs(upper[min(i,n-1)]) + 1.0 + rand()
+                         for i in 1:n]
+                rhs   = randn(n)
+
+                A = Tridiagonal(copy(lower), copy(diag), copy(upper))
+                x_dense = A \ copy(rhs)
+                x_thomas = thomas(copy(lower), copy(diag), copy(upper), copy(rhs))
+
+                @test x_thomas ≈ x_dense rtol=1e-10
+            end
+        end
+    end
+
+    # Non-diagonally-dominant but well conditioned. thomas! has no pivoting;
+    # this documents where it is still reliable.
+    @testset "Thomas without diagonal dominance (well conditioned)" begin
+        lower = [3.0, 3.0]
+        diag  = [1.0, 1.0, 1.0]
+        upper = [3.0, 3.0]
+        rhs   = [1.0, 2.0, 3.0]
+
+        A = Tridiagonal(copy(lower), copy(diag), copy(upper))
+        @test !is_diagonally_dominant(lower, diag, upper)
+        @test cond(Matrix(A)) < 100.0
+        @test thomas(copy(lower), copy(diag), copy(upper), copy(rhs)) ≈ A \ copy(rhs) rtol=1e-10
     end
 end

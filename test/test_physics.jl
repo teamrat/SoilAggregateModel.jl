@@ -4,6 +4,7 @@ Tests for physics/*.jl modules
 
 import SoilAggregateModel: TemperatureCache, AggregateState, Workspace,
                            alpha_effective, van_genuchten, water_content, update_water_content!,
+                           van_genuchten_inverse,
                            tortuosity_millington_quirk, D_eff_DOC, D_eff_bacteria,
                            D_eff_fungi_noninsulated, D_eff_fungi_mobile, D_eff_oxygen,
                            update_effective_diffusion!
@@ -223,12 +224,24 @@ end
         # Drier soil → lower diffusion
         @test D_Fn_dry < D_Fn_wet
 
-        # Mobile (no tortuosity)
-        D_Fm = D_eff_fungi_mobile(bio.D_Fm0, 1.0)  # Mobile fungi use D_Fm0
+        # Mobile: no tortuosity, but network-dependent. Translocation is
+        # internal to hyphae, so D_Fm scales with local sessile biomass
+        # (F_n + F_i) through a Michaelis-Menten factor with half-saturation
+        # K_Fm_net (Falconer 2005 eq. 2.1; MATLAB single_aggregate_beta.m:394).
+        F_dense = 100.0 * bio.K_Fm_net   # network far above half-saturation
+        D_Fm = D_eff_fungi_mobile(bio.D_Fm0, 1.0, F_dense/2, F_dense/2,
+                                  bio.K_Fm_net)
 
-        # D_Fm independent of water content
         @test D_Fm > 0.0
-        @test D_Fm ≈ bio.D_Fm0  # No reduction from tortuosity
+        # Approaches D_Fm0 for a dense network; no tortuosity reduction
+        @test D_Fm ≈ bio.D_Fm0 rtol=0.02
+
+        # No network → no translocation pathway
+        @test D_eff_fungi_mobile(bio.D_Fm0, 1.0, 0.0, 0.0, bio.K_Fm_net) == 0.0
+
+        # Half-maximum when F_n + F_i == K_Fm_net
+        @test D_eff_fungi_mobile(bio.D_Fm0, 1.0, bio.K_Fm_net/2,
+                                 bio.K_Fm_net/2, bio.K_Fm_net) ≈ 0.5 * bio.D_Fm0
     end
 
     @testset "Oxygen dual-phase diffusion" begin
@@ -269,8 +282,10 @@ end
         @test D_C_dry == 0.0
         @test D_Fn_dry == 0.0
 
-        # But mobile fungi still work
-        D_Fm_dry = D_eff_fungi_mobile(bio.D_Fm0, 1.0)
+        # But mobile fungi still translocate wherever a network exists:
+        # D_Fm depends on network density, not on water content
+        D_Fm_dry = D_eff_fungi_mobile(bio.D_Fm0, 1.0, 10*bio.K_Fm_net,
+                                      10*bio.K_Fm_net, bio.K_Fm_net)
         @test D_Fm_dry > 0.0
 
         # And oxygen can diffuse through gas phase
@@ -284,12 +299,17 @@ end
         ws = Workspace(n)
         bio = BiologicalProperties()
 
+        # D_Fm is network-dependent, so the state must supply F_n and F_i
+        state = AggregateState(n)
+        state.F_n .= 10 * bio.K_Fm_net
+        state.F_i .= 10 * bio.K_Fm_net
+
         # Set water content (varying)
         ws.θ .= range(0.1, 0.4, length=n)
         ws.θ_a .= soil.θ_s .- ws.θ
 
         # Update diffusion coefficients
-        update_effective_diffusion!(ws, soil, bio, temp_cache)
+        update_effective_diffusion!(ws, state, soil, bio, temp_cache)
 
         # All should be positive
         @test all(ws.D_C .> 0.0)
@@ -297,8 +317,8 @@ end
         @test all(ws.D_Fn .> 0.0)
         @test all(ws.D_O .> 0.0)
 
-        # D_Fm should be scalar and positive
-        @test temp_cache.D_Fm > 0.0
+        # D_Fm is now a per-node workspace array (network-dependent)
+        @test all(ws.D_Fm .> 0.0)
 
         # D_B should be less than D_C (slower motility)
         @test all(ws.D_B .< ws.D_C)
@@ -317,6 +337,14 @@ end
 
         # Create state with some EPS and fungi
         state = AggregateState(n)
+        # Every pool this sequence reads must be set: pools are NaN-filled, and
+        # D_Fm reads F_n even though this testset is about water and diffusion.
+        state.C .= 0.0
+        state.B .= 0.0
+        state.F_n .= 0.0
+        state.F_m .= 0.0
+        state.O .= 0.0
+        state.M .= 0.0
         state.E .= 5.0
         state.F_i .= 2.0
 
@@ -339,7 +367,7 @@ end
         update_water_content!(ws.θ, ws.θ_a, ψ, state, soil)
 
         # Step 3: Update effective diffusion
-        update_effective_diffusion!(ws, soil, bio, ws.f_T)
+        update_effective_diffusion!(ws, state, soil, bio, ws.f_T)
 
         # Verify everything is reasonable
         @test all(soil.θ_r .<= ws.θ .<= soil.θ_s)
@@ -350,7 +378,9 @@ end
 
         # Relationships
         @test all(ws.D_B .< ws.D_C)  # Bacteria slower than DOC
-        @test ws.f_T.D_Fm > 0.0       # Mobile fungi active
+        # D_Fm moved to the workspace as a per-node array when it became
+        # network-dependent; TemperatureCache.D_Fm is now a dead field (NaN).
+        @test all(ws.D_Fm .> 0.0)     # Mobile fungi active
     end
 end
 
@@ -375,7 +405,62 @@ end
         @inferred D_eff_DOC(0.864, 0.3, soil.θ_s, soil.ρ_b, soil.k_d_eq)
         @inferred D_eff_bacteria(0.1, soil.D_B_rel)
         @inferred D_eff_fungi_noninsulated(bio.D_Fn0, 1.0, 0.3, soil.θ_s)
-        @inferred D_eff_fungi_mobile(bio.D_Fm0, 1.0)
+        @inferred D_eff_fungi_mobile(bio.D_Fm0, 1.0, 0.01, 0.01, bio.K_Fm_net)
         @inferred D_eff_oxygen(150.0, 1.73e6, 29.0, 0.3, 0.15, soil.θ_s)
+    end
+end
+
+
+# ============================================================================
+# van_genuchten_inverse
+#
+# This is the entry point for every experiment specified as water content or
+# WFPS rather than as a potential (e.g. De Gryze 2006, "60 % WFPS"). A sign slip
+# or an m/n confusion in
+#       ψ = -((S_e^(-1/m) - 1)^(1/n)) / α,   m = 1 - 1/n
+# would silently mis-set the water driver for a whole run.
+#
+# The round-trip needs no expected values at all: it is its own reference.
+# ============================================================================
+@testset "van Genuchten inverse" begin
+    soil = SoilProperties()
+    α, n_vg, θ_r, θ_s = soil.α_vg, soil.n_vg, soil.θ_r, soil.θ_s
+
+    @testset "round-trip against van_genuchten" begin
+        for frac in (0.05, 0.2, 0.4, 0.6, 0.8, 0.95, 0.999)
+            θ_target = θ_r + frac * (θ_s - θ_r)
+            ψ = van_genuchten_inverse(θ_target, α, n_vg, θ_r, θ_s)
+            @test ψ <= 0.0
+            @test van_genuchten(ψ, α, n_vg, θ_r, θ_s) ≈ θ_target rtol=1e-10
+        end
+    end
+
+    @testset "round-trip the other way" begin
+        for ψ in (-1.0, -10.0, -33.0, -100.0, -1500.0)
+            θ = van_genuchten(ψ, α, n_vg, θ_r, θ_s)
+            @test van_genuchten_inverse(θ, α, n_vg, θ_r, θ_s) ≈ ψ rtol=1e-8
+        end
+    end
+
+    @testset "monotone decreasing in θ" begin
+        θs = [θ_r + f * (θ_s - θ_r) for f in 0.1:0.1:0.9]
+        ψs = [van_genuchten_inverse(θ, α, n_vg, θ_r, θ_s) for θ in θs]
+        @test all(diff(ψs) .> 0.0)      # wetter -> less negative
+    end
+
+    @testset "boundaries" begin
+        @test van_genuchten_inverse(θ_s, α, n_vg, θ_r, θ_s) == 0.0
+        @test van_genuchten_inverse(θ_s + 0.1, α, n_vg, θ_r, θ_s) == 0.0
+        @test_throws ArgumentError van_genuchten_inverse(θ_r, α, n_vg, θ_r, θ_s)
+        @test_throws ArgumentError van_genuchten_inverse(θ_r - 0.01, α, n_vg, θ_r, θ_s)
+    end
+
+    @testset "60 % WFPS — the De Gryze use case" begin
+        # Not a magic number: 0.6·θ_s is the definition of 60 % water-filled
+        # pore space. The assertion is the round-trip, not the value of ψ.
+        θ_60 = 0.60 * θ_s
+        ψ_60 = van_genuchten_inverse(θ_60, α, n_vg, θ_r, θ_s)
+        @test ψ_60 < 0.0
+        @test van_genuchten(ψ_60, α, n_vg, θ_r, θ_s) ≈ θ_60 rtol=1e-10
     end
 end

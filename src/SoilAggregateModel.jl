@@ -31,6 +31,8 @@ include("temperature/diffusion_pure.jl")
 include("temperature/henry.jl")
 
 # Physics
+include("physics/particle_size.jl")
+include("physics/tessellation.jl")
 include("physics/water_retention.jl")
 include("physics/effective_diffusion.jl")
 include("physics/initial_conditions.jl")
@@ -66,6 +68,7 @@ include("postprocessing/aggregate_radius.jl")
 include("postprocessing/integration.jl")
 include("postprocessing/derived.jl")
 include("postprocessing/radial_profiles.jl")
+include("postprocessing/population.jl")
 
 # Exports
 export BiologicalProperties, SoilProperties
@@ -73,6 +76,10 @@ export InitialConditions
 export AggregateState, OutputRecord
 export GridInfo, ParameterSet, SimulationResult, IntegratedPools
 export run_aggregate
+export sauter_mean_diameter, sauter_from_texture, TEXTURE_CLASS_DIAMETERS
+export domain_tessellation, pom_population, log_interpolate_fraction
+export van_genuchten, van_genuchten_inverse
 export compute_r_agg, integrated_pools, carbon_balance_table, radial_profiles
+export sieve_class, aggregate_mass, population_statistics
 export aqueous_concentrations, maoc_equilibrium, respiration_rates, carbon_use_efficiency, co2_flux
 end  # module SoilAggregateModel

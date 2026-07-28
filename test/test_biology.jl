@@ -229,10 +229,12 @@ end
         ε_F = 1e-10
         Π = Pi_protected(F_m, F_i, F_n, ε_F)  # = 4/5 = 0.8
 
-        α_i_T = 0.05
-        α_n_T = 0.1
-        β_i_T = 0.15
-        β_n_T = 0.2
+        # α = immobilization (gain, carries the exponent); β = mobilization
+        # (loss, linear). Chosen so this case is net immobilization.
+        α_i_T = 0.15
+        α_n_T = 0.2
+        β_i_T = 0.05
+        β_n_T = 0.1
         ζ_T = 0.02
         δ = 1.5
         η = 0.9
@@ -240,16 +242,20 @@ end
         trans = fungal_transitions(F_i, F_n, F_m, Π, α_i_T, α_n_T, β_i_T, β_n_T,
                                    ζ_T, δ, η, ε_F)
 
-        # Insulation: ζ·F_n
-        @test trans.insulation ≈ 0.02 * 2.0  # = 0.04
-
-        # Net transitions
+        # ζ is a SPLITTING FRACTION on the F_n tendency, NOT an independent
+        # drain (Falconer 2005/2008 Box 1; julia_falconer_deviations.md #2).
+        # fungal_transitions returns (immobil_i, immobil_n, Resp_F_conv).
         Π_delta = 0.8^1.5  # ≈ 0.7155
-        net_i = (0.15 * 0.8 - 0.05 * 0.7155) * 3.0  # = (0.12 - 0.03578) * 3.0 ≈ 0.2527
-        net_n = (0.2 * 0.8 - 0.1 * 0.7155) * 2.0    # = (0.16 - 0.07155) * 2.0 ≈ 0.1769
+        net_i = (0.15 * Π_delta - 0.05 * 0.8) * 3.0  # ≈ 0.2020
+        net_n = (0.2  * Π_delta - 0.1  * 0.8) * 2.0  # ≈ 0.1262
+        trans_i = 0.9 * net_i
+        trans_n = 0.9 * net_n
 
-        @test trans.trans_i ≈ 0.9 * net_i rtol=1e-3
-        @test trans.trans_n ≈ 0.9 * net_n rtol=1e-3
+        @test trans.immobil_i ≈ trans_i + ζ_T * trans_n rtol=1e-3
+        @test trans.immobil_n ≈ (1.0 - ζ_T) * trans_n   rtol=1e-3
+
+        # The ζ split must conserve the tendency: it redirects, never creates
+        @test trans.immobil_i + trans.immobil_n ≈ trans_i + trans_n rtol=1e-3
 
         # Conversion respiration (CRITICAL: uses abs())
         @test trans.Resp_F_conv ≈ 0.1 * abs(net_i + net_n) rtol=1e-3
@@ -530,9 +536,11 @@ end
     # The factor (θ + ρ_b·k_d)/k_d would over-drain C by ~1200x
     S_C = -R_B_val - R_F_val + R_rec - J_M_val
     S_B = Γ_B_val - R_rec_B_val
-    S_Fn = trans.trans_n - trans.insulation  # trans.trans_n already has η in it!
-    S_Fm = Γ_F_val - trans.trans_i - trans.trans_n - trans.Resp_F_conv
-    S_Fi = trans.insulation + trans.trans_i - R_rec_F_val
+    # ζ splitting is applied inside fungal_transitions; immobil_i already
+    # contains ζ·trans_n and immobil_n is (1-ζ)·trans_n. No separate drain.
+    S_Fn = trans.immobil_n
+    S_Fm = Γ_F_val - trans.immobil_i - trans.immobil_n - trans.Resp_F_conv
+    S_Fi = trans.immobil_i - R_rec_F_val
     S_E = Γ_E_val - R_rec_E_val
     S_M = J_M_val
 

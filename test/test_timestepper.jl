@@ -25,6 +25,7 @@ import SoilAggregateModel: AggregateState, Workspace, run_simulation, adapt_time
         state.M .= 5.0
         state.O .= 0.3
         state.P = 1000.0
+        state.P_0 = 1000.0   # required: J_P divides by P_0
         state.CO2_cumulative = 0.0
 
         # Create temperature cache
@@ -120,6 +121,7 @@ import SoilAggregateModel: AggregateState, Workspace, run_simulation, adapt_time
         state.M .= 5.0
         state.O .= 0.3
         state.P = 1000.0
+        state.P_0 = 1000.0   # required: J_P divides by P_0
         state.CO2_cumulative = 0.0
 
         # Compute total carbon using conservation weights (4πr²h)
@@ -197,6 +199,7 @@ import SoilAggregateModel: AggregateState, Workspace, run_simulation, adapt_time
         state.M .= 5.0
         state.O .= 0.3
         state.P = 1000.0
+        state.P_0 = 1000.0   # required: J_P divides by P_0
         state.CO2_cumulative = 0.0
 
         temp_cache = TemperatureCache()
@@ -258,6 +261,7 @@ import SoilAggregateModel: AggregateState, Workspace, run_simulation, adapt_time
         state.M .= 5.0
         state.O .= 0.3
         state.P = 1000.0
+        state.P_0 = 1000.0   # required: J_P divides by P_0
         state.CO2_cumulative = 0.0
 
         temp_cache = TemperatureCache()

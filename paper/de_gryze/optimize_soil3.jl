@@ -49,7 +49,7 @@ data_CO2   = [0.0, 481.954, 1263.633, 1766.159, 2139.010]  # µg-C/g-soil
 ## Fixed experimental setup (identical to run_degryze.jl)
 ## ============================================================
 
-T_const  = 293.15
+T_const  = 298.15   # 25 °C — De Gryze 2006 p.237 (was 293.15; diverged from run_degryze.jl)
 ψ_const  = -29.0
 O2_frac  = 0.21
 M_O2     = 0.032
@@ -69,22 +69,23 @@ diam_all  = [(bin_edges[i] + bin_edges[i+1]) / 2.0 for i in 1:length(bin_edges)-
 F_POM = cdf.(Normal(POM_mean, POM_sigma), bin_edges)
 f_POM = diff(F_POM)
 
-# Domain tessellation
-ρ_POM        = 200.0
-I_input      = 4.43e-3
-ρ_bulk       = 1300.0
-f_domain_min = 10.0
-C_input_vol  = I_input * ρ_bulk
-φ_POM        = C_input_vol / ρ_POM
-f_pack       = (1.0 / φ_POM)^(1/3)
-f_domain     = max(f_pack, f_domain_min)
-ω            = (f_domain / f_pack)^3
-domain_factor = f_domain
+# Domain tessellation and population — src/physics/tessellation.jl
+# (was a copy of the block in run_degryze.jl; the two had already diverged)
+ρ_POM   = 200.0
+I_input = 4.43e-3
+ρ_bulk  = 1300.0
+soil_V  = 100.0^3
 
-# Population counts
-soil_V = 100.0^3
-V_pack = [(4.0/3.0) * π * (d * f_pack / 2)^3 for d in diam_all]
-N_POM  = f_POM .* soil_V ./ V_pack
+tess = domain_tessellation(ρ_POM=ρ_POM, I_input=I_input, ρ_b=ρ_bulk)
+pop  = pom_population(diam_all, f_POM, tess; ρ_POM=ρ_POM, soil_volume_mm3=soil_V)
+
+C_input_vol   = I_input * ρ_bulk
+φ_POM         = tess.φ_POM
+f_pack        = tess.f_pack
+f_domain      = tess.f_domain
+ω             = tess.ω
+domain_factor = tess.f_domain
+N_POM         = pop.N_POM
 soil_mass_per_L = soil_V * ρ_bulk * 1e-6  # grams soil per liter
 
 # Soil 3: SOC = 2.21% (Table 1 in de Gryze)
@@ -264,7 +265,8 @@ function forward_model(θ::Vector{Float64}; verbose::Bool=false)
     end
 
     # Population-level CO₂
-    df_pop = population_outputs(df_summary, N_POM; ω=ω, sieve_sizes=Float64[])
+    df_pop = population_outputs(df_summary, N_POM; sieve_sizes=Float64[],
+                                ρ_b=ρ_bulk, f_C_POM=0.443)
     co2_model_per_g = df_pop.CO2_total ./ soil_mass_per_L
 
     # Interpolate to data times
@@ -531,7 +533,8 @@ function run_diagnostics(θ_opt::Vector{Float64})
         snap_times=[0.0]
     )
     
-    df_pop = population_outputs(df_summary, N_POM; ω=ω, sieve_sizes=[0.25, 0.5, 1.0, 2.0])
+    df_pop = population_outputs(df_summary, N_POM; sieve_sizes=[0.25, 0.5, 1.0, 2.0],
+                                ρ_b=ρ_bulk, f_C_POM=0.443)
     co2_model = df_pop.CO2_total ./ soil_mass_per_L
     
     # Interpolate to data times

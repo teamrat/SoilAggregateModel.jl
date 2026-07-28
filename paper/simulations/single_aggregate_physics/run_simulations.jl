@@ -87,15 +87,21 @@ for (i, idx) in enumerate(diagnostic_indices)
     α_n_T = STANDARD_BIO.α_n * f_T_fun
     β_i_T = STANDARD_BIO.β_i * f_T_fun
     β_n_T = STANDARD_BIO.β_n * f_T_fun
-    ζ_T = STANDARD_BIO.ζ * f_T_fun
+    # ζ is a dimensionless SPLITTING FRACTION, not a rate. Clamp after the
+    # Arrhenius factor, exactly as reactions.jl:116 does — otherwise ζ_T can
+    # exceed 1 and flip the sign of immobil_n.
+    ζ_T = min(STANDARD_BIO.ζ * f_T_fun, 1.0)
 
     trans = fungal_transitions(F_i_0, F_n_0, F_m_0, Π, α_i_T, α_n_T, β_i_T, β_n_T,
                               ζ_T, STANDARD_BIO.delta, STANDARD_BIO.η_conv, ε_F)
 
-    # Compute net rates manually for clarity
+    # Net SIGNED tendency per unit biomass — Falconer (2005) eq. 2.4:
+    #   α = immobilization (the GAIN, carries the exponent)
+    #   β = mobilization   (the LOSS, linear in Π)
+    # Positive = net immobilization. Must match fungi.jl:332-333.
     Π_delta = Π^STANDARD_BIO.delta
-    net_i_raw = β_i_T * Π - α_i_T * Π_delta
-    net_n_raw = β_n_T * Π - α_n_T * Π_delta
+    net_i_raw = α_i_T * Π_delta - β_i_T * Π
+    net_n_raw = α_n_T * Π_delta - β_n_T * Π
 
     println()
     println("Time: $(t_days) days ($(t_months) months)")
@@ -104,15 +110,15 @@ for (i, idx) in enumerate(diagnostic_indices)
     println("    F_n = $(round(F_n_0, digits=6))")
     println("    F_m = $(round(F_m_0, digits=6))")
     println("  Protection ratio: Π = $(round(Π, digits=6))")
-    println("  Net transition rates [μg/mm³/day]:")
-    println("    net_i (raw) = β_i·Π - α_i·Π^δ = $(round(net_i_raw * F_i_0, digits=8))")
-    println("    net_n (raw) = β_n·Π - α_n·Π^δ = $(round(net_n_raw * F_n_0, digits=8))")
-    println("  Actual fluxes:")
-    println("    trans_i (η·net_i·F_i) = $(round(trans.trans_i, digits=8))")
-    println("    trans_n (η·net_n·F_n) = $(round(trans.trans_n, digits=8))")
-    println("    insulation (ζ·F_n → F_i) = $(round(trans.insulation, digits=8))")
-    println("  Net change to F_n [μg/mm³/day]:")
-    println("    dF_n/dt ≈ trans_n - insulation = $(round(trans.trans_n - trans.insulation, digits=8))")
+    println("  Net transition tendency [μg/mm³/day]  (+ = immobilizing):")
+    println("    net_i = (α_i·Π^δ − β_i·Π)·F_i = $(round(net_i_raw * F_i_0, digits=8))")
+    println("    net_n = (α_n·Π^δ − β_n·Π)·F_n = $(round(net_n_raw * F_n_0, digits=8))")
+    println("  Fluxes after conversion cost (η) and ζ splitting:")
+    println("    immobil_i (→ F_i)  = $(round(trans.immobil_i, digits=8))")
+    println("    immobil_n (→ F_n)  = $(round(trans.immobil_n, digits=8))")
+    println("    Resp_F_conv        = $(round(trans.Resp_F_conv, digits=8))")
+    println("  Net change to F_n [μg/mm³/day]  (S_Fn = immobil_n, no separate ζ drain):")
+    println("    dF_n/dt ≈ $(round(trans.immobil_n, digits=8))")
 
     # === Bacterial budget diagnostics ===
     println()
@@ -207,16 +213,16 @@ for (i, idx) in enumerate(diagnostic_indices)
         Y_F_val = STANDARD_BIO.Y_F
         Γ_F_val = Y_F_val * R_F_val
 
-        # Mobilization flux into F_m
-        # When net_i < 0 or net_n < 0, mass flows into F_m
-        # Total mobilization = -(trans_i + trans_n) when negative
-        mobilization_source = 0.0
-        if trans.trans_i < 0
-            mobilization_source -= trans.trans_i
-        end
-        if trans.trans_n < 0
-            mobilization_source -= trans.trans_n
-        end
+        # F_m exchange with the sessile pools.
+        #
+        #   S_Fm = Γ_F − immobil_i − immobil_n − Resp_F_conv   (reactions.jl:166)
+        #
+        # ζ only redistributes between F_i and F_n, so the TOTAL crossing the
+        # F_m boundary is (immobil_i + immobil_n) = η·(net_i + net_n) and ζ
+        # cancels out of it. Positive drains F_m; negative fills it.
+        net_immobil          = trans.immobil_i + trans.immobil_n
+        mobilization_source  = max(0.0, -net_immobil)   # sessile → F_m
+        immobilization_sink  = max(0.0,  net_immobil)   # F_m → sessile
 
         # Diffusive flux out of node 0 (spherical geometry)
         # J_diff ≈ -D × ∂F_m/∂r at r_0
@@ -246,7 +252,8 @@ for (i, idx) in enumerate(diagnostic_indices)
         println("      Mobilization (from F_i+F_n) = $(round(mobilization_source, digits=8))")
         println("    Sinks [μg/mm³/day]:")
         println("      Diffusive loss = $(round(diffusive_loss_rate, digits=8))")
-        println("      Immobilization (β·Π terms) = $(round(max(0, trans.trans_i + trans.trans_n), digits=8))")
+        println("      Immobilization (α·Π^δ terms) = $(round(immobilization_sink, digits=8))")
+        println("      Conversion respiration = $(round(trans.Resp_F_conv, digits=8))")
         println()
         println("    C_aq at node 0 = $(round(C_aq, digits=8)) μg/mm³")
         println("    O_aq at node 0 = $(round(O_aq, digits=8)) μg/mm³")

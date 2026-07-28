@@ -32,6 +32,14 @@ using SoilAggregateModel
         include("test_physics.jl")
     end
 
+    @testset "Particle Size Distribution" begin
+        include("test_particle_size.jl")
+    end
+
+    @testset "Domain Tessellation" begin
+        include("test_tessellation.jl")
+    end
+
     @testset "Biology" begin
         include("test_biology.jl")
     end
@@ -66,5 +74,9 @@ using SoilAggregateModel
 
     @testset "Post-processing" begin
         include("test_postprocessing.jl")
+    end
+
+    @testset "Population Upscaling" begin
+        include("test_population.jl")
     end
 end

@@ -1,7 +1,9 @@
 # Soil Aggregate Model — Reference Manual
 
 **Last Updated**: 2026-02-09
-**Authoritative source for physics**: `manuscript_updated.tex`
+**Authoritative source for physics**: the manuscript on Overleaf
+(`Dropbox/Apps/Overleaf/Aggregation 2026 rev3/manuscript-4-5.tex`).
+The previously named `manuscript_updated.tex` does not exist.
 **Authoritative source for solver design**: `ARCHITECTURE_CLAUDE_CODE.md`
 **Units throughout**: μg/mm³ (= kg/m³), mm, days, kPa, K, J/mol
 
@@ -15,6 +17,9 @@
 3. [Biological Parameters](#3-biological-parameters)
 4. [Soil Properties](#4-soil-properties)
 5. [Environmental Drivers](#5-environmental-drivers)
+5a. [Parameter Provenance and Anchors](#5a-parameter-provenance-and-anchors)
+5b. [Domain Tessellation and Population Upscaling](#5b-domain-tessellation-and-population-upscaling)
+5c. [Aggregate Mass, Sieve Classes and Sample Statistics](#5c-aggregate-mass-sieve-classes-and-sample-statistics)
 
 ### Part II: Rates, Fluxes, and Source Terms
 6. [Concentration Partitioning (C / C_aq / C_eq)](#6-concentration-partitioning)
@@ -125,17 +130,25 @@ Temperature dependence:
 
 | Symbol | Code | Value | Units | Notes |
 |--------|------|-------|-------|-------|
-| α_i | `α_i` | 0.1 | day⁻¹ | Mobilization rate, insulated |
-| α_n | `α_n` | 0.15 | day⁻¹ | Mobilization rate, non-insulated |
-| β_i | `β_i` | 0.0 | day⁻¹ | Immobilization rate, insulated |
-| β_n | `β_n` | 0.0 | day⁻¹ | Immobilization rate, non-insulated |
-| δ | `delta` | 2.0 | — | Mobilization exponent (must be > 1) |
-| η | `η_conv` | 0.8 | — | Conversion efficiency; (1−η) lost to respiration |
-| ζ | `ζ` | 0.2 | day⁻¹ | Insulation rate (F_n → F_i) |
+Naming follows Falconer (2005) eq. 2.4 / (2008) Box 1: **α is immobilization**
+(mobile → sessile, the gain, and it carries the exponent); **β is mobilization**
+(sessile → mobile, the loss, linear in Π). These were inverted before 2026-07.
+See §5a for provenance.
+
+| Symbol | Code | Value | Units | Notes |
+|--------|------|-------|-------|-------|
+| α_i | `α_i` | 0.1 | day⁻¹ | **Immobilization** rate → insulated (gain; carries δ) |
+| α_n | `α_n` | 0.15 | day⁻¹ | **Immobilization** rate → non-insulated (gain; carries δ) |
+| β_i | `β_i` | 0.0 | day⁻¹ | **Mobilization** rate from insulated (loss; linear in Π) |
+| β_n | `β_n` | 0.0 | day⁻¹ | **Mobilization** rate from non-insulated (loss; linear in Π) |
+| δ | `delta` | 1.0 | — | Immobilization exponent — Falconer's θ. 1.0 = MATLAB linear case; Falconer's nonlinear runs use 3.0 |
+| η | `η_conv` | 0.8 | — | Conversion efficiency (Falconer's γ); (1−η) lost to respiration |
+| ζ | `ζ` | 0.2 | — | Insulation **splitting fraction** on the F_n tendency. Dimensionless, NOT a rate. Clamped to ≤ 1 after the Arrhenius factor (`reactions.jl:115`) |
 | λ | `λ` | 0.05 | — | Reduced uptake fraction for insulated hyphae (λ ≪ 1) |
-| D_Fn0 | `D_Fn0` | — | mm²/day | Hyphal extension diffusivity at T_ref |
-| D_Fm0 | `D_Fm0` | 1.0 | mm²/day | Translocation rate at T_ref (no tortuosity) |
-| ε_F | `ε_F` | 1e-10 | μg/mm³ | Π denominator protection |
+| D_Fn0 | `D_Fn0` | 0.01 | mm²/day | Hyphal extension diffusivity at T_ref |
+| D_Fm0 | `D_Fm0` | 1.0 | mm²/day | Translocation at T_ref. No tortuosity, but **network-dependent** — scaled by (F_n+F_i)/(F_n+F_i+K_Fm_net) |
+| K_Fm_net | `K_Fm_net` | 2e-3 | μg/mm³ | Half-saturation for the D_Fm network factor |
+| ε_F | `ε_F` | 1e-4 | μg/mm³ | Π denominator protection |
 
 Fungal uptake: only (λ·F_i + F_n) contributes. All Γ_F enters F_m. Only F_i dies.
 
@@ -224,11 +237,77 @@ Clay-dependent capacity: M_max = k_ma · ρ_b · f_clay_silt.
 
 ### 4.4 Aggregate Stability
 
+*Rewritten 2026-07-28. The previous entry listed `k_F` in kPa (the code used Pa),
+plus two fields — `χ` and `a_p` — that no source file read. See §26 erratum 11.*
+
 | Symbol | Code | Units | Notes |
 |--------|------|-------|-------|
-| k_F | `k_F` | kPa/(μg/mm³) | Specific binding strength |
-| χ | `χ` | mm | Particle adhesion length scale |
-| a_p | `a_p` | mm | Particle radius |
+| κ_b | `κ_b` | Pa·mm/(μg/mm³) | Specific binding strength per unit binder carbon. **Fitted** |
+| w_E | `w_E` | — | Binding weight of EPS relative to insulated hyphae, per unit carbon. **Fitted** |
+| d₃₂ | `d_32` | mm | Sauter mean particle diameter. **Measured** — from texture via `sauter_from_texture` |
+
+**The criterion.** Local cohesive strength against the wall shear stress of the
+oscillatory Stokes layer:
+
+    τ_c(r) = (κ_b / d₃₂) · [F_i(r) + w_E·E(r)]  ≥  τ_w
+
+which reduces to a concentration threshold, independent of radial position:
+
+    F_i(r) + w_E·E(r)  ≥  G_c = τ_w · d₃₂ / κ_b
+
+`τ_w = √2·μ·v_s/δ_s` with `δ_s = √(2ν_w/Ω)`; for the standard sieving protocol
+(`L_s = 13` mm, `f_s = 34` min⁻¹) this gives **δ_s = 0.7510 mm** and
+**τ_w = 0.04367 Pa**. That chain is unchanged and independently verified.
+
+#### Why strength scales as 1/d₃₂
+
+Failure separates particles at their bonded contacts. Particles of diameter `d`
+tile a failure surface, so the number of bonded contacts crossing unit area
+scales as `1/d²`. Strength is that count times the force per bond. Where the
+bond force scales linearly with particle size — the geometry of a binder bridge
+held at a contact, as for a capillary bridge — strength `∝ (1/d²)·d = 1/d`.
+
+At fixed binder concentration a **finer soil is stronger**: more contacts in the
+same failure area. Equivalently a coarser soil needs more binder to hold, so
+`G_c ∝ d₃₂`.
+
+This is the form derived and tested against three sand sizes by **Albalasmeh and
+Ghezzehei (2014)**, whose model makes aggregate stability depend on soil texture
+together with the strength, density and mass fraction of the binding organic
+matter. It is a deduction plus that prior result, **not** a fit to the De Gryze
+soils — those are the test, and the comparison is reported in
+`paper/de_gryze/degryze_EJSS_2006_spec.md`.
+
+**The caveat.** The 1/d result requires the bond force to scale linearly with
+particle size. If the bridge instead stays geometrically similar so that force
+`∝ d²`, the size dependence cancels entirely. The linear case is the capillary
+analogue; EPS is a hydrogel forming bridges at contacts, so the analogy is
+reasonable but it is an analogy.
+
+#### Why the Sauter mean
+
+The bond count follows interfacial area, so the correct average is the one that
+preserves the volume-to-surface ratio — the Sauter mean `d₃₂ = 1/Σ(fᵢ/dᵢ)`
+(**Sauter, 1926**). A geometric or arithmetic mean is dominated by the coarse
+fraction, which supplies the fewest contacts per unit mass, and gives a
+measurably worse ordering across the five De Gryze soils.
+
+`d₃₂` is dominated by the finest class, so the representative diameter assumed
+for clay is the most consequential input (`TEXTURE_CLASS_DIAMETERS`, clay =
+1 µm). **Ordering between soils is robust to that choice; the spread is not.**
+
+#### What is fitted and what is not
+
+`κ_b` and `w_E` are **fitted**. The argument above fixes the *form* — strength
+proportional to binder concentration and inversely to particle size — and says
+nothing about the coefficients. `κ_b = 0.0143869` carries forward the threshold
+previously in use rather than silently changing it: it is `2.25 × d₃₂(soil 3)`,
+which reproduces the old `G_c = τ_w/2.25` exactly, independently of `τ_w`; `w_E = 0.5`
+was hard-coded in `aggregate_radius.jl` before this revision and is now a named
+parameter so it can be fitted rather than hidden. See §5a.
+
+The package default `d_32 = 0.01` mm is a **nominal placeholder**. Every real
+problem must override it.
 
 ---
 
@@ -245,6 +324,395 @@ end
 Parametric types: constants are as fast as literals.
 
 ---
+
+## 5a. Parameter Provenance and Anchors
+
+**Purpose.** Records, for every parameter that can move a model output, whether a
+literature or precursor value exists and whether the code currently uses it.
+Sections 2–4 give values; this section gives their standing.
+
+**What counts as an anchor.** A published source, or a value in the MATLAB
+precursor that itself carries a citation. A value inherited from the precursor
+*without* a citation is **not** an anchor — it is one prior choice among many.
+Derived quantities (`K_Y`, `ε_Y`, `C_B`, `K_E`) inherit the standing of what they
+are derived from.
+
+**Source documents.** `dev_notes/MATLAB_parameters.md` and
+`dev_notes/MATLAB_aggregation_logic.md` (parse of the 2018 precursor, with its
+citations); `dev_notes/falconer_answers.md` (extraction from Falconer 2005/2008).
+
+> ⚠ `dev_notes/` is listed in `.gitignore`. Those three files are **untracked**
+> and are the only record of most citations below. This section exists partly so
+> the provenance survives independently of them.
+
+---
+
+### Group A — anchored, and the anchor is in use
+
+| Parameter | Value | Anchor |
+|---|---|---|
+| `K_B` | 1e-4 | Maier 2015 Box 3.1 — range 1e-5–3e-3 |
+| `L_B`, `L_F` | 1.29e-3 | Maier 2015 — range 1e-5–3e-3 |
+| `α_O` | 2.2 | Maier 2015 Eq 3.19 (2.667) / Ex 3.5 (2.167) |
+| `ν_F` | 7.58e-5 | Tresner & Hayes 1971, via Ghezzehei et al. 2018 |
+| `θ_r` | 0.06 | UNSODA, average silt loam |
+| `D_C0_ref` | 86.4 | Flury & Gimmi, in Dane & Topp (Eds.) 2002 |
+| `λ` | 0.05 | MATLAB; Falconer λ₂ = 0.01 (2005), 0.1 (2008) |
+
+### Group B — anchored, and the code deviates
+
+The actionable list. Correcting these requires no new judgement.
+
+| Parameter | Anchor | `parameters.jl` | `run_degryze.jl` | Deviation |
+|---|---|---|---|---|
+| `D_B_rel` | Wu et al. 2006, AEM 72:4987–4994 → **0.01** | 0.001 | **1e-5** | **1000×** |
+| `ζ` | MATLAB **0.01**; Falconer **0.01** | **0.2** | — | **20×** |
+| `r_B_max` | Maier 2015 — **0.48–2.16** | 2.0 ✓ | **8.0** | 3.7× above max |
+| `μ_B` | Wang et al. 2014, Biogeosciences 11:1817 → **0.012** | 0.012 ✓ | **0.0036** | 3.3× below |
+| `ν_B` | Ghezzehei et al. 2018 → **2e-4** | **5.8e-4** | — | 2.9× above |
+| `α_i, α_n, β_i, β_n` | Falconer 2005 via MATLAB — **0.6, 0.8, 0.1, 0.2** | 0.1, 0.15, 0, 0 | — | gains 4–5× low; mobilization disabled |
+| `Y_B_max` | Maier 2015 Fig 3.8 → 0.5 | 0.7 | **0.4** | no range published |
+| `θ_s` | UNSODA silt loam → 0.43 | **0.5** | — | 16% |
+| `n_vg` | UNSODA silt loam → 1.39 | **1.47** | — | 6% |
+| `delta` | Falconer θ: 1.0 (linear control) or 3.0 (nonlinear runs), `falconer_answers.md` §B2; MATLAB 1 | 1.0 | — | **OPEN DECISION — see below** |
+
+Note that `run_degryze.jl` moves four of these off their anchors simultaneously
+(`r_B_max`, `μ_B`, `Y_B_max`, `D_B_rel`), and `R_P_max` was subsequently tuned
+against that configuration.
+
+### Open decision: `delta`
+
+**Status: undecided. The default is 1.0 and nothing has settled that it should
+stay there.**
+
+Falconer runs θ = 1.0 as a *linear control* and θ = 3.0 as the nonlinear case,
+and calls θ > 1 the regime of interest (`dev_notes/falconer_answers.md` §B2).
+Our default of 1.0 reproduces the MATLAB reference bit-for-bit — MATLAB is
+Falconer with θ = 1 and β = 0, a strict special case — so it is a
+porting-verification choice, not a scientific one.
+
+At least three values have been in play historically: **2.0** (documented in
+§3.3 until 2026-07-27), **1.0** (the code), **3.0** (Falconer). Whoever chose
+1.0 did not record why, and `paper/de_gryze/julia_falconer_deviations.md` — the
+document whose whole subject is where Julia departs from Falconer — does not
+mention `delta` at all.
+
+Note that δ only bites when β > 0. With mobilization disabled (β_i = β_n = 0,
+the current default) the gain is `α·Π^δ` with nothing to compete against it, so
+raising δ rescales the transition rate rather than creating the threshold
+behaviour Falconer describes. **δ and β should be decided together, not
+separately.**
+
+This is recorded here and nowhere else. It was previously encoded as a failing
+assertion in `test/test_parameters.jl` — see §26.
+
+### Open decision: `M_max`
+
+**Status: undecided. The code currently uses two different values in the same
+run and this has not been resolved.**
+
+| Where | Value | Line |
+|---|---|---|
+| Initial MAOC partition | `k_ma · f_clay_silt · ρ_b` = 0.48 × 0.40 × 1500 = **288.0** | `initial_conditions.jl:382` |
+| Isotherm the solver evolves against | `soil.M_max` = **10.0** | `reactions.jl:152`, default at `parameters.jl:275` |
+
+`maoc.jl:44` states `M_max = k_ma · f_clay_silt · ρ_b` as definitional, which
+would make 288 the intended value and 10.0 a stale independent keyword. But the
+units do not close as written: `k_ma` is documented as µg-C per **gram** of
+mineral while `ρ_b` is µg/mm³, so the product is not dimensionally clean in
+either reading.
+
+**Consequence while unresolved:** the initial pool is built against a capacity
+of 288 and then evolved against a capacity of 10, so `M(0) ≫ M_eq` and every run
+opens with a spurious desorption pulse. The guard at `initial_conditions.jl:418`
+compares against 288 and therefore never fires.
+
+Found by the 2026-07-28 test audit (`docs/TEST_AUDIT_2026-07-28.md` §4b). Three
+separate positivity assertions on `M_max`, `k_ma` and `f_clay_silt` each pass
+individually; nothing asserts the relation between them. **Do not resolve this by
+picking whichever value looks better** — it needs the intended definition and its
+units, from the manuscript or from the author.
+
+### Group C — no anchor, and outcome-relevant
+
+Fitting belongs here. Roughly fifteen parameters against two observables.
+
+| Parameter | Value | Controls | Precursor |
+|---|---|---|---|
+| **`κ_b`** | 0.0143869 | sets `G_c` — the aggregation threshold outright | none; fitted to reproduce the previous `G_c = 0.0194` at soil 3. Replaces `k_F = 2.25`, whose stated derivation `σ_h·d_p/(4ρ_h)` was dimensionally inconsistent (§26 erratum 11) |
+| **`w_E`** | 0.5 | relative value of EPS vs hyphal carbon | none; inherited as a hard-coded literal from the MATLAB precursor (`strength = Fi + 0.5*E`) |
+| **`γ`** | 0.2 | EPS allocation → the dominant binding agent | MATLAB 0.05, uncited |
+| `D_Fn0` | 0.01 (run: 1e-5) | hyphal front speed | MATLAB 1e-11, uncited |
+| `D_Fm0` | 1.0 (run: 1e-3) | translocation | MATLAB 1e-5, uncited |
+| `μ_E_max`, `K_E` | 0.002, 0.001 | EPS turnover | MATLAB `mu_E` = 0.01, uncited |
+| `R_P_max` | 1.0 (run: 2.5) | substrate supply rate | MATLAB split soluble/enzymatic, "not proper partitioning" |
+| `κ_s_ref`, `κ_d_ref` | 0.1, 0.01 | MAOC buffering | no MAOC pool in MATLAB |
+| `k_ma`, `k_L`, `n_LF`, `M_max` | — | MAOC isotherm | no MAOC pool in MATLAB |
+| `B_S`, `F_S` | 0.5, 0.2 | space-limited yield | Julia-era; MATLAB `logistic_B` commented out |
+| `ε_F` | 1e-4 | caps Π | Julia-era; MATLAB `PI = Fm/(Fi+Fn)`, unregularized |
+| `F_i_min`, `F_n_min`, `F_m_min` | 1e-6, 1e-4, 1e-6 | fungal floors — set the starting point | MATLAB IC: `Fi = 0`, `E = 0` |
+| `f_insulated` | 0.5 | initial F_i / F_n split | Falconer E1: **not stated**; MATLAB starts F_i = 0 |
+| `ω_E`, `ω_F` | −0.001, −0.0005 | EPS / fungal effect on water retention | MATLAB `WRC_change` = −1.5, **cited** to Ghezzehei & Albalasmeh 2015 — different parameterization; the citation did not survive the port |
+
+### Group D — not parameters, but they move the result
+
+Hard-coded in `src/postprocessing/aggregate_radius.jl`, unreachable from any
+configuration. They fix `τ_w = 0.0437 Pa` for every soil and every run:
+
+| Quantity | Value | Note |
+|---|---|---|
+| `L_s` | 13.0 mm | sieving stroke length — assay property |
+| `f_s` | 34/60 Hz | sieving frequency — assay property |
+| `μ` | 1.002e-3 Pa·s | water viscosity at 20 °C |
+| `ν_w` | 1.004 mm²/s | water kinematic viscosity at 20 °C |
+
+`L_s` and `f_s` describe one apparatus. A different sieving protocol changes
+`τ_w` and therefore `G_c`, with no way to express that through the parameter
+structs.
+
+Also hard-coded in `paper/de_gryze/run_degryze.jl`: `POM_mean = 1.25`,
+`POM_sigma = 0.23` (the paper reports only "0.5–2 mm"; the normal distribution
+is an invention), `f_domain_min = 10.0`, `ρ_POM = 200`.
+
+---
+
+### Implication for calibration
+
+Group B should be corrected **before** any fitting exercise, not during it. A fit
+performed over Group C while Group B sits off its anchors will absorb the Group B
+errors into unanchored parameters, and the deviation becomes invisible.
+
+
+## 5b. Domain Tessellation and Population Upscaling
+
+`src/physics/tessellation.jl`. The solver integrates one domain around one POM
+particle; comparing against a bulk-soil measurement requires the geometry that
+links the two. Both quantities below follow from measured inputs, so neither
+belongs in an experiment script.
+
+### Domain geometry — `domain_tessellation`
+
+| Quantity | Formula | Meaning |
+|---|---|---|
+| `φ_POM` | `I_input · ρ_b / ρ_POM` | POM volume fraction of bulk soil [-] |
+| `f_pack` | `(1/φ_POM)^(1/3)` | packing-cell diameter / POM diameter [-] |
+| `f_domain` | `max(f_pack, f_domain_min)` | model domain radius / POM radius [-] |
+| `ω` | `(f_domain/f_pack)³` | overlap correction [-] |
+
+`f_domain_min` (default 10) exists so the radial grid resolves the near-POM
+gradients. Where it binds, neighbouring domains overlap and each holds more than
+its share of surrounding soil — `ω` is that excess.
+
+### The ω convention
+
+`create_initial_state` divides **background carbon** by `ω`: C, B, F_n, F_m,
+F_i, E, M. **POM is not divided**, being a lumped scalar at the domain centre
+rather than carbon spread through the soil.
+
+The same asymmetry holds downstream. `Σ nᵢ·CO₂ᵢ` and `Σ nᵢ·P₀ᵢ` are already
+per-unit-soil totals and must not be divided by `ω` again; aggregate volume
+fractions are built from physical diameters and physical counts and carry no
+`ω` either. Dividing twice understates the amendment by a factor of `ω`.
+
+### Population — `pom_population`
+
+    V_pack[i] = (4/3)π(dᵢ·f_pack/2)³        soil owned by one particle
+    N_POM[i]  = f_POM[i] · V_soil / V_pack[i]
+    P_0[i]    = (4/3)π(dᵢ/2)³ · ρ_POM
+
+**The cells tile the soil:** `Σ Nᵢ·V_pack,ᵢ = V_soil` exactly, provided
+`Σ f_POM = 1`. This identity is why the population bookkeeping in §5c can
+subtract totals rather than looping per class — the two are the same arithmetic.
+It also means `f_POM` **must be normalised**: a distribution truncated at the bin
+edges recovers an `I_input` low by exactly the shortfall.
+
+**Verification:** `total_POM_C / (V_soil · ρ_b · 1e-6)` must reproduce the
+experiment's stated amendment rate in µg-C per g soil.
+
+This is an **exact, distribution-free identity**, not a sanity check:
+
+    Σ Nᵢ·P₀,ᵢ = Σ [fᵢ·V / ((4/3)π(dᵢ f_pack/2)³)] · (4/3)π(dᵢ/2)³·ρ_POM
+              = (V·ρ_POM / f_pack³) · Σ fᵢ
+              = V·ρ_POM·φ_POM                    (f_pack³ = 1/φ_POM)
+              = V·I_input·ρ_b
+
+so it holds for any diameters and any normalised fractions, and it pins the
+`f_pack` exponent, both radius/diameter halvings and both `(4/3)π` factors at
+once. Asserted in `test/test_tessellation.jl` (added 2026-07-28; this module
+previously had no tests at all).
+
+### `log_interpolate_fraction(lo, mid, hi)`
+
+`ln(mid/lo) / ln(hi/lo)` — the fraction of a size class below `mid` assuming
+equal mass per logarithmic interval. Used where a measured size fraction spans
+two reporting classes and the split is unreported. It is an assumption about
+particle-size distributions and must be recorded as such wherever applied.
+
+### `van_genuchten_inverse(θ, α, n, θ_r, θ_s)`
+
+`src/physics/water_retention.jl`. Returns the ψ [kPa] giving water content θ:
+
+    ψ = -(S_e^(-1/m) - 1)^(1/n) / α,    S_e = (θ-θ_r)/(θ_s-θ_r),  m = 1-1/n
+
+For experiments specifying water content or WFPS rather than a potential. The
+result depends on α, n, θ_r and θ_s, so it must be evaluated with the same soil
+the run will use.
+
+
+## 5c. Aggregate Mass, Sieve Classes and Sample Statistics
+
+`src/postprocessing/population.jl`. §5b builds the population; this section
+turns it into something a wet-sieving measurement can be compared with.
+
+### `ρ_b` is the amended sample's bulk density
+
+Throughout §5c, `ρ_b` is the bulk density of the **amended** sample — soil plus
+the residue mixed into it — so that `ρ_b · V` is the total sample mass. This is
+a deliberate simplification: it removes any need to track the amendment
+separately when forming `f_agg` and the class shares. The amendment is ~1 % of
+soil mass, so the amended and bare-soil readings differ by ~1 %.
+
+The same `ρ_b` also sets the aggregate shell density (`aggregate_mass`), the POM
+volume fraction in the tessellation (§5b), and porosity via `θ_s = 1 − ρ_b/ρ_s`.
+The convention therefore propagates, at that ~1 % level, into all three. Where a
+measured bulk density is available for the amended soil it should be used
+directly; where only the bare-soil value is reported, using it here is the
+approximation being accepted.
+
+### Mass of one aggregate — `aggregate_mass`
+
+    m = ρ_b·(4/3)π·max((D_agg/2)³ − r_0³, 0)   mineral shell
+      + P_C / f_C_POM                           remaining residue
+
+Mass, not volume. `r_agg` can sit still for days while the residue inside is
+respired away, so volume weighting discards the only time dependence retained
+mass has, and simultaneously treats a POM-rich aggregate as if it were solid
+mineral. `f_C_POM` is the residue carbon fraction and is experiment-specific —
+the function has **no default** for it or for `ρ_b`.
+
+### Sieve classes — `sieve_class`
+
+`k` apertures define `k+1` classes, ascending. The convention is `D < aperture`
+passes, matching wet sieving. Class 1 is below the first aperture; class `k+1`
+is at or above the last.
+
+### Sample statistics — `population_statistics`
+
+Takes `n_sizes × n_times` matrices of `D_agg`, `POM`, `CO₂` and `CO₂ flux`,
+plus `r_0` and the particle counts `n_dist` from §5b.
+
+| Output | Definition |
+|---|---|
+| `MWD_agg_only` | `Σᵢ nᵢmᵢDᵢ / Σᵢ nᵢmᵢ` — over aggregates **only** |
+| `f_agg` | aggregate share of sample mass `ρ_b·V_soil` |
+| `f_agg_vol` | aggregate share of sample volume — diagnostic |
+| `POM_mass_frac` | residue share of retained coarse mass |
+| `CO2_total`, `CO2_flux_total` | `Σᵢ nᵢ·CO₂ᵢ`, `Σᵢ nᵢ·flux ᵢ` |
+| `class_pct` | `(k+1) × n_times`, % of sample mass per class |
+| `MWD_fixed_weight` | `Σₖ nominalₖ·class_pctₖ / 100` |
+
+### The well-mixed closure, and where it stops being defensible
+
+The classes are defined by **the assay's sieve series**, not by sand/silt/clay.
+The algorithm is universal; only the cutoffs are problem-specific. Mapping a
+measured texture onto a particular sieve series belongs to the experiment.
+
+Given no information about which particles a growing aggregate takes up, the
+least-assuming closure is that the matrix is well mixed and material is
+incorporated **in proportion to its relative abundance**. The remainder's
+composition is then unchanged and only its total falls, which is what
+`cls[k] += (1 − f_agg)·mineral_class_fractions[k]` encodes. This is a statement
+about what the model does **not** track, not a claim about uptake physics.
+
+**The continuum/discrete boundary.** The model is a continuum — a homogeneous
+shell of bulk-density matrix around a POM core. The class accounting is discrete
+— it speaks of particles of named sizes. The two are compatible only while the
+shell is much thicker than the particles it is said to contain. A 0.6 mm
+aggregate cannot engulf a 0.5 mm grain, and no bookkeeping rule makes it able to.
+
+At the De Gryze operating point this is not a marginal concern. Day 21, soil 3:
+
+| Quantity | Value |
+|---|---|
+| mass-weighted shell thickness | **485–711 µm** (`shell_thickness_mm`) |
+| coarse mineral class | 250–2000 µm |
+| share of that class coarser than the shell | ~50–68 % |
+| **share of the whole sample coarser than its own shell** | **~14 %** |
+| `f_agg` from day 5 | **0.25** |
+
+So roughly a seventh of the sample is mineral that the closure assigns to
+aggregate interiors it could not physically fit inside, while a quarter of the
+sample is claimed as aggregate. The **total** mass balance is unaffected — the
+columns still sum to 100 — but the *composition* of the remainder is not
+defensible in detail.
+
+`shell_thickness_mm` is returned from `population_statistics` for exactly this
+check: compare it against the coarse end of `sieve_sizes` in every run.
+
+**No size-restricted uptake rule is applied, deliberately.** Restricting
+absorption to particles finer than the aggregate would splice a discrete
+particle model into a continuum one. That is the incoherence restated, not a fix
+for it. Resolving it properly means choosing one representation.
+
+### Per-class occupancy — what the bulk formula hides
+
+Subtracting total shell mass from total sample mass is exactly equivalent to
+subtracting per particle and summing over classes, by the tiling identity in
+§5b. The equivalence is convenient, but it means **one size class overrunning
+its own share of soil is silently absorbed by the others** — the total stays
+consistent while a class has eaten more than it owns.
+
+`population_statistics` therefore accepts `cell_volume_mm3` (from
+`pom_population`'s `V_pack`) and returns `cell_occupancy[i,t]`, the aggregate
+volume of class `i` divided by the cell it owns. **A value ≥ 1 is a failure of
+the independent-domain picture**, not a large number. `NaN` when the cell
+volumes are not supplied.
+
+De Gryze soil 3 at day 21, for scale: 0.47 for the 0.65 mm class down to 0.17
+for the 1.85 mm class. The smallest POM class is the one to watch, because it
+owns the least soil.
+
+### `f_agg` is not clamped
+
+`f_agg > 1` means the model produced more aggregate than there is sample. It is
+reported raw and warns, because a clamp would leave `f_agg` reading exactly 1.0
+while the class columns summed past 100. Only the mineral top-up is floored, so
+the class shares stay non-negative and the disagreement stays visible.
+
+### What the model does not predict
+
+The model predicts aggregates. It carries **no particle-size distribution for
+the unaggregated matrix**. Reporting class shares as fractions of the whole
+sample therefore requires that distribution to be supplied
+(`mineral_class_fractions`, `k+1` fractions summing to 1); the unaggregated
+remainder `(1 − f_agg)` is then spread across the classes with it and the
+columns sum to 100 %. Supply nothing and the class columns carry aggregate mass
+alone, summing to `f_agg`.
+
+`class_nominal_mm` without `mineral_class_fractions` is rejected: a
+fixed-weight sum over shares that are not whole-sample shares is not comparable
+with a published MWD.
+
+`MWD_agg_only` and a published MWD are **different quantities**. The first is a
+mean over POM-centred aggregates; the second is a fixed-weight sum over sieve
+classes covering the whole sample. A fixed-weight MWD is a convex combination
+of its nominals, so it saturates at the largest and is bounded below by the
+smallest whatever the aggregates do.
+
+### ω does not appear here
+
+Every sum in this file is built from physical particle counts and physical
+diameters and is already a per-sample total. `ω` corrects background-carbon
+*concentration* inside an oversized domain and is applied once, at
+initialization (§5b). Applying it again understates the amendment by that
+factor.
+
+### Placement
+
+`paper/de_gryze/postprocess_dataframe.jl` holds a `population_outputs` wrapper
+that extracts columns from a sweep DataFrame, calls `population_statistics`,
+and names the class columns. It defines nothing. It sits outside `src/` only
+because the package does not depend on DataFrames or CSV.
 
 # Part II: Rates, Fluxes, and Source Terms
 
@@ -303,18 +771,43 @@ R_rec = R_rec,B + R_rec,F + R_rec,E (total recycling back to C pool).
 
 Relative mobile fraction: Π = F_m / (F_i + F_n + ε_F)
 
-Net transfer functions (already contain η):
+Net **signed** tendencies. α (immobilization, gain) carries the exponent;
+β (mobilization, loss) is linear. Positive = net immobilization:
 ```
-net_i = η · (β_i · Π − α_i · Π^δ) · F_i     (positive = immobilization)
-net_n = η · (β_n · Π − α_n · Π^δ) · F_n     (positive = immobilization)
+net_i = (α_i · Π^δ − β_i · Π) · F_i
+net_n = (α_n · Π^δ − β_n · Π) · F_n
 ```
 
-Insulation: trans_ni = ζ · F_n (one-way, F_n → F_i)
+Conversion efficiency applied:
+```
+trans_i = η · net_i
+trans_n = η · net_n
+```
 
-Source terms from transitions:
-- S_Fi gets: +net_i + trans_ni
-- S_Fn gets: +net_n − trans_ni
-- S_Fm gets: −net_i − net_n
+ζ is a **splitting fraction** on the F_n tendency, not an independent drain. A
+fraction ζ of trans_n is redirected to F_i; the remainder stays with F_n. Because
+both are signed, a mobilizing F_n also draws a ζ share off F_i:
+```
+immobil_i = trans_i + ζ · trans_n
+immobil_n = (1 − ζ) · trans_n
+```
+
+Conversion respiration — `abs()` is required so mobilization also carries a cost
+and carbon still closes:
+```
+Resp_F_conv = (1 − η) · |net_i + net_n|
+```
+
+Source terms (`reactions.jl:165–167`):
+```
+S_Fi = immobil_i − R_rec_F
+S_Fn = immobil_n
+S_Fm = Γ_F − immobil_i − immobil_n − Resp_F_conv
+```
+
+Mobilization is currently disabled (β_i = β_n = 0), so `S_Fn ≥ 0` and F_n has no
+sink of any kind — Falconer gives b_n no death term either (falconer_answers.md
+§C1). With β > 0 the bracket becomes signed and F_n can lose biomass.
 
 ---
 
@@ -388,27 +881,67 @@ Tortuosity:
 
 ## 14. Source/Sink Summary
 
+Transcribed from `src/solver/reactions.jl:160–172` and
+`src/biology/fungi.jl:324–350`, verified 2026-07-28.
+
+The fungal terms are written through the intermediates the code actually
+computes, not expanded. Expanding them is what let this section drift out of
+step with §9 for five months — see §26.
+
 ```
+Fungal intermediates (fungi.jl, fungal_transitions):
+
+  net_i     = (α_i·Π^δ − β_i·Π)·F_i         signed: + immobilizing, − mobilizing
+  net_n     = (α_n·Π^δ − β_n·Π)·F_n
+  immobil_i = η·net_i + ζ·η·net_n            ζ splits the F_n tendency
+  immobil_n = (1 − ζ)·η·net_n
+  Resp_F^conv = (1 − η)·|net_i + net_n|      abs(): mobilization also costs C
+
+
 S_P  = −R_P
 
-S_C  = −R_B − R_F + R_rec − J_M     (+ diffusion + POM Neumann BC)
+S_C  = −R_B − R_F + R_rec − J_M                      (+ diffusion + POM Neumann BC)
 
 S_B  = Γ_B − R_rec,B
 
-S_Fi = ζ·F_n + η·(β_i·Π − α_i·Π^δ)·F_i − R_rec,F
+S_Fi = immobil_i − R_rec,F
 
-S_Fn = η·(β_n·Π − α_n·Π^δ)·F_n − ζ·F_n
+S_Fn = immobil_n                                     (+ diffusion)
 
-S_Fm = Γ_F − η·(β_i·Π − α_i·Π^δ)·F_i − η·(β_n·Π − α_n·Π^δ)·F_n − Resp_F^conv   (+ diffusion)
+S_Fm = Γ_F − immobil_i − immobil_n − Resp_F^conv     (+ diffusion)
 
 S_E  = Γ_E − R_rec,E
 
 S_M  = J_M
 
-S_O  = −α_O·(Resp_B + Resp_F + Resp_F^conv)     (+ diffusion)
+S_O  = −α_O·(Resp_B + Resp_F + Resp_F^conv) / (θ + K_H(T)·θ_a)   (+ diffusion)
 ```
 
-**Conservation**: S_P + ∫(S_C + S_B + S_Fi + S_Fn + S_Fm + S_E + S_M)·4πr²dr = −∫(Resp_B + Resp_F + Resp_F^conv)·4πr²dr
+**There is no separate insulation term.** `S_Fn` has no `−ζ·F_n` and `S_Fi` has
+no `+ζ·F_n`. ζ is a dimensionless splitting fraction applied *inside*
+`fungal_transitions` to the F_n tendency, not a one-way drain rate. The
+independent-drain form was removed in February 2026; if you find `trans_ni`
+anywhere, it is stale.
+
+**F_n has no death term.** Only F_i recycles (`R_rec,F` uses `F_i` alone). That
+matches Falconer, who gives neither sessile pool an independent loss
+(`dev_notes/falconer_answers.md` §C1) — though the F_i death term itself is
+ours, not Falconer's.
+
+**The O₂ divisor is not optional.** `S_O` is divided by the O₂ capacity
+`θ + K_H(T)·θ_a`, because O is stored as a bulk concentration while respiration
+consumes from the aqueous phase (`reactions.jl:170`).
+
+**Conservation**:
+
+    S_P + ∫(S_C + S_B + S_Fi + S_Fn + S_Fm + S_E + S_M)·4πr²dr
+        = −∫(Resp_B + Resp_F + Resp_F^conv)·4πr²dr
+
+A useful sub-check: `immobil_i + immobil_n = η·(net_i + net_n)`, so ζ cancels
+out of `S_Fi + S_Fn + S_Fm = Γ_F − Resp_F^conv − R_rec,F` exactly. **If a change
+to ζ alters total fungal carbon, ζ has stopped being a splitting fraction** —
+which is the failure mode the Arrhenius clamp at `reactions.jl:116` guards
+against.
 
 ---
 
@@ -437,10 +970,32 @@ S_O  = −α_O·(Resp_B + Resp_F + Resp_F^conv)     (+ diffusion)
 | `K_H_O2(T)` | Dimensionless K_H | Convenience for O₂ |
 | `O2_saturation(T, P_atm=0.21)` | μg-O₂/mm³ | Air-saturated aqueous concentration |
 
+### physics/tessellation.jl
+| Function | Computes |
+|----------|----------|
+| `domain_tessellation(; ρ_POM, I_input, ρ_b, f_domain_min)` | φ_POM, f_pack, f_domain, ω |
+| `pom_population(diam, f_POM, tess; ρ_POM, soil_volume_mm3)` | N_POM, P_0 per particle, total POM C |
+| `log_interpolate_fraction(lo, mid, hi)` | equal-mass-per-log-interval split |
+
+### postprocessing/population.jl
+| Function | Computes |
+|----------|----------|
+| `sieve_class(D, sieve_sizes)` | class index, ascending, `D < aperture` passes |
+| `aggregate_mass(D_agg, r_0, P_C; ρ_b, f_C_POM)` | shell + core dry mass [µg] |
+| `population_statistics(D_agg, POM, CO2, flux, r_0, n_dist; ...)` | MWD, f_agg, class shares, population CO₂ |
+
+### physics/particle_size.jl
+| Function | Computes |
+|----------|----------|
+| `sauter_mean_diameter(f, d)` | `d₃₂ = 1/Σ(fᵢ/dᵢ)` — preserves volume/surface ratio |
+| `sauter_from_texture(sand, silt, clay; ...)` | `d₃₂` [mm] from a USDA texture triple |
+| `TEXTURE_CLASS_DIAMETERS` | assumed class midpoints (clay 1 µm, silt 10 µm, sand 316 µm) |
+
 ### physics/water_retention.jl
 | Function | Returns |
 |----------|---------|
 | `θ(ψ, E, F_i, soil)` | Water content (van Genuchten, modified α) |
+| `van_genuchten_inverse(θ, α, n, θ_r, θ_s)` | ψ [kPa] from water content — inverse of the above |
 
 ### physics/effective_diffusion.jl
 | Function | Returns |
@@ -473,7 +1028,7 @@ S_O  = −α_O·(Resp_B + Resp_F + Resp_F^conv)     (+ diffusion)
 | `Resp_F(R_F, Y_F)` | Fungal uptake respiration |
 | `h_Fi(F_i, F_i_min)` | Non-negativity sigmoid |
 | `R_rec_F(F_i, μ_F, h_Fi)` | Fungal death (F_i only) |
-| `fungal_transitions(F_i, F_n, F_m, Π, ...)` | Returns (net_i, net_n, trans_ni) |
+| `fungal_transitions(F_i, F_n, F_m, Π, ...)` | Returns **(immobil_i, immobil_n, Resp_F_conv)** |
 | `Resp_F_conv(net_i, net_n, η)` | Conversion respiration, uses **abs()** |
 
 ### biology/eps.jl
@@ -766,6 +1321,152 @@ Issues found during 2026-02-05/06 audit. The **code** has the corrected versions
 | 3 | EPS degradation substrate | K_E/(K_E + C) | K_E/(K_E + C_aq) |
 | 4 | Resp_F^conv sign | No abs() | abs() wraps net transfer sum |
 | 5 | POM notation | Ambiguous R_P units | J_P [μg/mm²/day] vs R_P = 4πr₀²·J_P [μg/day] |
+
+### Errata in THIS document — 2026-07
+
+These are cases where the reference manual itself was wrong, not the
+manuscript. Recorded because the same failure recurred twice.
+
+| # | Section | Was | Now | Found |
+|---|---|---|---|---|
+| 6 | §3.3, §9 | α labelled **mobilization**, β **immobilization**; exponent on the loss term | α = immobilization (gain, carries δ); β = mobilization (loss, linear) — matching Falconer (2005) eq. 2.4 / (2008) Box 1 and `parameters.jl` | 2026-07-27 |
+| 7 | §9 | `trans_ni = ζ·F_n`, a one-way drain | ζ is a splitting fraction applied inside `fungal_transitions`; the drain form was deleted in February 2026 | 2026-07-27 |
+| 8 | §14 | Carried **both** errata 6 and 7 — inverted α/β **and** `±ζ·F_n` — and omitted the O₂ capacity divisor from `S_O` | Transcribed from `reactions.jl` through the code's own intermediates | 2026-07-28 |
+
+**Why erratum 8 happened.** §3.3 and §9 were fixed on 2026-07-27 and the item
+was reported closed without §14 being checked. §14 restates the same source
+terms in expanded form, so it holds a *second copy* of every convention in §9 —
+and a fix applied to one copy does not reach the other.
+
+Two rules follow, and they are the reason this errata table exists:
+
+1. **Search the whole document for the symbol, not the section you remember.**
+   `grep -n "α_i\|β_i\|ζ" docs/REFERENCE.md` would have caught it in seconds.
+2. **§14 now defers to the intermediates** (`immobil_i`, `immobil_n`,
+   `Resp_F^conv`) instead of expanding them. One statement of a convention
+   cannot contradict another statement of it if there is only one.
+
+**The repo-wide sweep that followed** (2026-07-28) found the same two
+conventions stale in six more places. All fixed:
+
+| File | Was |
+|---|---|
+| `docs/ARCHITECTURE.md` §4.3 | inverted α/β, `±ζ·F_n`, pre-audit `−J_M·(θ+ρ_b·k_d)/k_d` (erratum 2, fixed in code in February), `S_O` missing its capacity divisor |
+| `docs/ARCHITECTURE.md` struct listing | α labelled "Mobilization rate", β "Immobilization rate", ζ "Insulation rate [1/day]" |
+| `docs/GUIDE.md` §5 | inverted α/β, η misplaced inside `net`, `trans_ni = ζ·F_n` described as one-way insulation |
+| `docs/GUIDE.md` reaction-step listing | `(net_i, net_n, trans_ni)` |
+| `docs/REFERENCE.md` §15 catalog | `fungal_transitions` documented as returning `(net_i, net_n, trans_ni)`; it returns `(immobil_i, immobil_n, Resp_F_conv)` |
+| `src/physics/initial_conditions.jl:344` | comment gave `S_Fn` with α/β swapped (the arithmetic beneath it used α_n's value under β_n's name, so the conclusion held) |
+| `paper/simulations/single_aggregate_physics/run_simulations.jl` | **live code**, read `trans.trans_i` / `trans.trans_n` / `trans.insulation` — fields that have not existed since February. Would throw on first use |
+
+### Erratum 9 — a modelling choice encoded as a test *(2026-07-28)*
+
+`test/test_parameters.jl:31` asserted `bio.delta > 1.0` inside the default-constructor
+smoke test, against a default of 1.0. It had been failing for an unknown period.
+
+It was never a valid test. Its neighbours in that testset assert **invariants**
+(`Y_B_max <= 1.0`, `Ea_B > 0.0`) — things whose violation means the parameter set
+is wrong. `delta > 1.0` asserts a **choice**: δ = 1 is Falconer's own linear
+control, not a broken value. A default constant also cannot regress; it changes
+only when someone edits `parameters.jl`, which git already records.
+
+Replaced with `@test bio.delta > 0.0`, which *is* an invariant (δ ≤ 0 makes the
+gain term constant or divergent). The open question moved to §5a, where open
+questions belong.
+
+**The cost of having left it red:** with one known failure, `1 failed` reads as
+"the known one" and a genuine regression arriving as `2 failed` goes unnoticed.
+A permanently red suite does not preserve a question — it spends the signal that
+would tell you about the next real defect.
+
+---
+
+### Erratum 10 — post-processing disagreed with the solver *(2026-07-28)*
+
+`respiration_rates` and `carbon_use_efficiency` (`src/postprocessing/derived.jl`)
+re-derive the uptake and transition terms from the stored state. That second
+implementation had drifted from `compute_source_terms` in three places:
+
+| Quantity | Was (derived.jl) | Solver (reactions.jl) |
+|---|---|---|
+| `O_aq` | `O·θ/(θ + K_H·θ_a)` (:205, :309) | `O` (:77) — state.O is already aqueous |
+| `C_aq` | `C/(1 + k_d·ρ_b)` (:54) | `C/(θ + ρ_b·k_d_eq)` (:75) |
+| `ζ_T` | `ζ·f_fun`, unclamped (:227) | `min(ζ·f_fun, 1.0)` (:115) |
+
+The O₂ one is the consequential one: with `K_H ≈ 34` and θ ≈ 0.4 the factor is
+≈ 0.11, so reported respiration and CUE were evaluated at roughly a tenth of the
+oxygen the solver used. **Every respiration figure taken from post-processing
+before this date is not the quantity the simulation ran on.**
+
+All three are corrected. The oracle that catches this class of drift was already
+present and discarded — `derived.jl:188` computed `compute_source_terms(...)` and
+threw the result away — so `test_postprocessing.jl` now asserts
+`respiration_rates` against `compute_source_terms` node by node at `rtol=1e-12`.
+
+**The general lesson.** Any quantity computed twice will diverge. Where a second
+implementation is unavoidable, the test must compare the two, not check that each
+is internally consistent — 432 assertions in that file checked structure,
+non-negativity and self-sums, and none of them could see a 10× error in the
+driving concentration.
+
+---
+
+### Erratum 12 — uninitialised state and workspace arrays *(2026-07-28)*
+
+`AggregateState(n)` and `Workspace(n)` allocated every array with
+`Vector{Float64}(undef, n)`. Any pool a caller forgot to set therefore read
+whatever happened to be on the heap: wrong, and **non-deterministic**.
+
+Found through a test in `test_physics.jl` that set `E` and `F_i` but not `F_n`,
+then read `F_n` through `D_eff_fungi_mobile`. It passed or failed depending on
+the run, with no code change between — two consecutive runs of the same suite
+disagreed.
+
+Both constructors now fill with **`NaN`**. Of the three options:
+
+| fill | behaviour on a forgotten pool |
+|---|---|
+| `undef` | wrong answer, non-deterministic, silent |
+| `0.0` | wrong answer, deterministic, silent — "no fungi" is perfectly plausible |
+| **`NaN`** | **propagates and fails at the first assertion that touches it** |
+
+This matches the convention `TemperatureCache` already used for the Arrhenius
+factors, and `test_types.jl` now asserts the contract for all eight state pools
+and the workspace scratch arrays. Zero would be the worst choice for the
+workspace in particular, where a zero diffusivity is a physically meaningful
+value that would quietly stop transport.
+
+`create_initial_state` assigns all eight pools plus `P`, `P_0` and
+`CO2_cumulative`, so no production path depends on the fill. Both constructors
+run once per simulation, never in the hot loop.
+
+### Erratum 11 — the binding-strength derivation *(2026-07-28)*
+
+`k_F = σ_h·d_p/(4ρ_h)` did not balance dimensionally: `σ_h d_p/ρ_h` has units
+Pa·m⁴·kg⁻¹ where Pa·m³·kg⁻¹ is required — one extra length. The stated value
+2.25 was recovered only by expressing `d_p` in metres while `ρ_h` was in
+µg mm⁻³; in the model's own length unit the identical formula gives 2250.
+
+The cause was not a slipped exponent. The prose described **tensile rupture**
+(hyphae snapping across a surface, hence σ_h) while the algebra multiplied by a
+**pull-out** length — two different failure mechanisms spliced together. Working
+the stated argument through (isotropic strands, ⟨|cos θ|⟩ = ½ twice) gives
+`k_F = σ_h/(4ρ_h)` with no `d_p`, which is dimensionally clean and reproduces
+the accompanying claim that the result is independent of hyphal diameter.
+
+Two further inconsistencies in the same quantity: `docs/REFERENCE.md` §4.4
+listed `k_F` in **kPa** while the code used **Pa**, and the fields `χ` and `a_p`
+were carried in `SoilProperties` with no reader anywhere in `src/`.
+
+Replaced by the bond-counting form in §4.4, with the texture dependence carried
+by the Sauter mean diameter and the two coefficients declared as fitted.
+
+---
+
+Historical documents that *quote* the old form were left alone on purpose:
+`docs/STRUCTURAL_AUDIT_2026-07-27.md`, `dev_notes/falconer_questions.md`
+(the brief describes what we had when we asked), `paper/de_gryze/julia_falconer_deviations.md`
+and everything under `dev_notes/archive/`.
 
 ---
 

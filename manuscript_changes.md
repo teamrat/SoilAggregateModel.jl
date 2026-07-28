@@ -219,7 +219,10 @@ Correct accounting: Add the negative value directly to CO₂ (effectively subtra
 
 ## Testing Status
 
-- **Unit tests**: 1289 passed, 6 failed, 3 errored (failures are pre-existing, unrelated to conservation fix)
+- **Unit tests** *(as of 2026-02-09, superseded)*: 1289 passed, 6 failed, 3 errored.
+  **Current: 1363 passed, 1 failed** — see `README.md`. This document is a record
+  of the February conservation work and is not maintained; do not read test
+  counts from it.
 - **Physics test (Theme 1)**: Complete with all changes integrated
 - **Conservation**:
   - **Fixed dt=0.001, 365 days**: -1.13×10⁻¹⁴% error (machine precision)

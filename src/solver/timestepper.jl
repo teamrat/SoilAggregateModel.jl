@@ -92,6 +92,17 @@ function run_simulation(state::AggregateState, workspace::Workspace,
                        dt_min::Real=1e-4, dt_max::Real=0.1,
                        output_interval::Real=1.0,
                        output_times::Vector{Float64}=Float64[])
+    # POM dissolution divides by state.P_0 (J_P: pom_factor = P / P_0).
+    # AggregateState(n) initialises P_0 = 0.0, so a state built by hand rather
+    # than via create_initial_state silently yields Inf and then NaN through
+    # every pool. Fail loudly instead of producing garbage.
+    if !(state.P_0 > 0.0)
+        throw(ArgumentError(
+            "AggregateState.P_0 must be > 0 (got $(state.P_0)). " *
+            "create_initial_state sets it automatically; if you built the " *
+            "state directly, set state.P_0 = state.P before integrating."))
+    end
+
     # Initialize
     t = t_start
     dt = dt_initial

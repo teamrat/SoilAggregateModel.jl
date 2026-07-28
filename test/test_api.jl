@@ -47,16 +47,19 @@ import SoilAggregateModel: create_initial_state, compute_total_carbon, compute_c
 
     # === Test 2: Initial state creation ===
     @testset "Initial state creation" begin
-        bio = BiologicalProperties()
-        state = create_initial_state(10, bio)
+        bio  = BiologicalProperties()
+        soil = SoilProperties()
+        ic   = InitialConditions()
+        state = create_initial_state(10, bio, soil, ic)
 
         # Check all fields exist and are positive
         @test all(state.C .> 0.0)
         @test all(state.B .> 0.0)
         @test all(state.F_n .> 0.0)
         @test all(state.F_m .> 0.0)
-        @test all(state.F_i .>= 0.0)  # F_i starts at 0 (develops over time)
-        @test all(state.E .>= 0.0)   # E starts at 0 (produced by bacteria)
+        # F_i and E are now seeded from SOC fractions, not from zero
+        @test all(state.F_i .>= 0.0)
+        @test all(state.E .>= 0.0)
         @test all(state.M .>= 0.0)   # M starts at 0 (accumulates from sorption)
         @test all(state.O .> 0.0)
 
@@ -77,7 +80,9 @@ import SoilAggregateModel: create_initial_state, compute_total_carbon, compute_c
         r_grid = [r_0 + i*h for i in 0:n-1]
 
         # Create state with known total carbon
-        state = create_initial_state(n, bio)
+        soil = SoilProperties()
+        ic   = InitialConditions()
+        state = create_initial_state(n, bio, soil, ic)
 
         # Initial error should be zero (all carbon in POM)
         error = compute_carbon_balance_error(state, r_grid, h, bio.P_0)
@@ -113,6 +118,10 @@ import SoilAggregateModel: create_initial_state, compute_total_carbon, compute_c
         custom_state.M .= 4.0
         custom_state.O .= 0.3
         custom_state.P = 500.0  # Different from bio.P_0
+        # J_P computes pom_factor = P/P_0, so a hand-built state must set
+        # P_0 explicitly (AggregateState defaults it to 0.0). Match P so the
+        # aggregate starts undepleted.
+        custom_state.P_0 = custom_state.P
         custom_state.CO2_cumulative = 0.0
 
         T(t) = 293.15

@@ -1,7 +1,13 @@
 # SoilAggregateModel.jl
 
-**Last Updated**: 2026-02-06
-**Status**: ✅ Complete — 524/524 tests passing, carbon conservation to machine precision
+**Last Updated**: 2026-07-28
+**Status**: 1363 / 1364 tests passing, carbon conservation to machine precision.
+
+The one failure is deliberate and open: `test_parameters.jl:31` asserts
+`bio.delta > 1.0` while `parameters.jl` sets `delta = 1.0`. The default
+reproduces the MATLAB linear form; whether Falconer's exponent is > 1, and which
+term carries it, is the open question in `dev_notes/falconer_questions.md`. The
+test is left failing rather than relaxed.
 
 ---
 
@@ -83,32 +89,37 @@ Total state: 8n + 1 (+ cumulative CO₂ diagnostic).
 
 ```
 SoilAggregateModel.jl/
-├── src/                      # Source code (SoilAggregateModel module)
-│   ├── SoilAggregateModel.jl # Main module file
+├── src/                      # The Julia package. All model code lives here.
+│   ├── SoilAggregateModel.jl # Module: include order + exports
 │   ├── types.jl              # AggregateState, Workspace, TemperatureCache
 │   ├── parameters.jl         # BiologicalProperties, SoilProperties
 │   ├── constants.jl          # Physical constants (R_GAS)
 │   ├── environment.jl        # EnvironmentalDrivers{FT,Fψ,FO}
+│   ├── result.jl             # SimulationResult, OutputRecord, GridInfo
+│   ├── math_utils.jl         # Shared numerical helpers
+│   ├── api.jl                # Public API (run_aggregate)
 │   │
-│   ├── temperature/          # Temperature dependencies
+│   ├── temperature/
 │   │   ├── arrhenius.jl      # Arrhenius factor
 │   │   ├── diffusion_pure.jl # Stokes-Einstein, Han-Bartels, Chapman-Enskog
 │   │   └── henry.jl          # Henry's law K_H(T)
 │   │
-│   ├── physics/              # Soil physics
-│   │   ├── water_retention.jl    # Modified van Genuchten θ(ψ, E, F_i)
-│   │   └── effective_diffusion.jl # Tortuosity-limited diffusion
+│   ├── physics/
+│   │   ├── tessellation.jl       # Domain geometry, ω, POM population  (§5b)
+│   │   ├── water_retention.jl    # van Genuchten θ(ψ,E,F_i) and its inverse
+│   │   ├── effective_diffusion.jl # Tortuosity-limited diffusion
+│   │   └── initial_conditions.jl # InitialConditions, create_initial_state
 │   │
-│   ├── biology/              # Biological processes
+│   ├── biology/
 │   │   ├── bacteria.jl       # Bacterial growth, mortality, recycling
 │   │   ├── fungi.jl          # Fungal growth, transitions, translocation
 │   │   ├── eps.jl            # EPS production and recycling
 │   │   └── maoc.jl           # MAOC sorption (Langmuir-Freundlich)
 │   │
-│   ├── carbon/               # Carbon cycling
+│   ├── carbon/
 │   │   └── pom_dissolution.jl # Enzymatic POM breakdown
 │   │
-│   ├── solver/               # Numerical solver
+│   ├── solver/
 │   │   ├── tridiagonal.jl        # Thomas algorithm
 │   │   ├── crank_nicolson.jl     # CN diffusion step
 │   │   ├── finite_volumes.jl     # Conservation weights
@@ -118,38 +129,35 @@ SoilAggregateModel.jl/
 │   │   ├── workspace_updates.jl  # Update caches once per timestep
 │   │   └── timestepper.jl        # Strang splitting + adaptive Δt
 │   │
-│   └── api.jl                # Public API (run_aggregate)
+│   └── postprocessing/
+│       ├── helpers.jl        # Shared integration helpers
+│       ├── aggregate_radius.jl # r_agg from the binding criterion
+│       ├── integration.jl    # integrated_pools (total and aggregate domains)
+│       ├── derived.jl        # Aqueous concentrations, CO₂ flux, CUE
+│       ├── radial_profiles.jl # Spatial snapshots
+│       └── population.jl     # Aggregate mass, sieve classes, MWD  (§5c)
 │
-├── test/                     # Test suite (524 tests)
-│   ├── runtests.jl           # Main test runner
-│   ├── test_types.jl         # Data structures
-│   ├── test_parameters.jl    # BiologicalProperties, SoilProperties
-│   ├── test_environment.jl   # EnvironmentalDrivers
-│   ├── test_temperature.jl   # Arrhenius, diffusion, Henry's law
-│   ├── test_tridiagonal.jl   # Thomas algorithm
-│   ├── test_crank_nicolson.jl # CN solver + BCs
-│   ├── test_physics.jl       # Water retention, effective diffusion
-│   ├── test_biology.jl       # Bacteria, fungi, EPS, MAOC
-│   ├── test_pom.jl           # POM dissolution
-│   ├── test_reactions.jl     # Source/sink computation
-│   ├── test_timestepper.jl   # Time integration, adaptive Δt
-│   └── test_api.jl           # User-facing API
+├── test/                     # Test suite (1364 tests), one file per module
+│   └── runtests.jl           # Main runner; see it for the current file list
 │
-├── docs/                     # Documentation
+├── docs/
 │   ├── ARCHITECTURE.md       # Implementation architecture (authoritative)
 │   ├── GUIDE.md              # Theory, usage, developer guide
-│   └── REFERENCE.md          # Variables, parameters, functions
+│   ├── REFERENCE.md          # Variables, parameters, functions, provenance
+│   └── STRUCTURAL_AUDIT_2026-07-27.md # Placement audit and remediation status
 │
-├── scripts/                  # Diagnostic scripts
-│   └── diagnostics_30day.jl  # 30-day simulation with detailed diagnostics
+├── dev_notes/                # Working notes, MATLAB provenance, open questions
+├── references/               # Source PDFs
+├── patches/                  # Staged edits not yet applied
+├── scripts/                  # Diagnostic scripts. Not part of the package.
 │
-├── paper/                    # Manuscript materials
-│   ├── simulations/          # Figure generation scripts
-│   │   ├── common.jl         # Shared parameters
-│   │   └── README.md
+├── paper/
+│   ├── de_gryze/             # De Gryze (2006) incubation — see its README
+│   ├── simulations/          # Figure generation scripts; each includes common.jl
 │   ├── figures/              # Output figures (syncs to Overleaf)
 │   └── data/                 # Simulation outputs
 │
+├── CLAUDE.md                 # Working rules — read before any structural change
 ├── Project.toml              # Julia package manifest
 └── README.md                 # This file
 ```
@@ -222,7 +230,7 @@ All internal computations use: **μg, mm, days, kPa, K, J/mol**. No unit convers
 - Complete rewrite with custom Crank-Nicolson solver
 - Verification against manuscript equations
 - Parameter corrections (ρ_b, ρ_POM, λ, K_Y units)
-- 524 tests, carbon conservation to machine precision
+- Carbon conservation to machine precision
 
 **Theoretical basis**: Ghezzehei, T.A. et al. (2026), manuscript in preparation.
 

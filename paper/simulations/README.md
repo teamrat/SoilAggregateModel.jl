@@ -26,3 +26,21 @@ In your LaTeX manuscript, reference figures as:
 ```latex
 \includegraphics[width=\linewidth]{figures/fig01_aggregate_lifecycle.pdf}
 ```
+
+## Repair log
+
+**2026-07-28 — `single_aggregate_physics/run_simulations.jl` was broken.** Its
+fungal diagnostic block read `trans.trans_i`, `trans.trans_n` and
+`trans.insulation` from the value returned by `fungal_transitions`. That
+function has returned `(immobil_i, immobil_n, Resp_F_conv)` since the February
+2026 rewrite, so the script threw on the first diagnostic time and could not
+have produced output since. Two further defects in the same block: the printed
+`net` formula had α and β swapped relative to `fungi.jl`, and `ζ_T` was not
+clamped to 1 after the Arrhenius factor the way `reactions.jl:116` clamps it.
+
+All three are fixed. **The script has not been re-run** — the `.log` and `data/`
+files in that directory predate the repair and should be regenerated before any
+figure is taken from them.
+
+Note also that the workflow section above names `fig01_aggregate_lifecycle.jl`,
+which does not exist in this directory.

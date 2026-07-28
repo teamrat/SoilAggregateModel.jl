@@ -123,7 +123,7 @@ All assimilated carbon Γ_F = Y_F·R_F enters F_m (the translocation network), t
 Three compartments capture the biology of fungal hyphae:
 
 - **F_m** (mobile) — the translocation network. Receives all growth. Diffuses freely (no tortuosity — transport is internal to hyphae). Distributes resources to immobile compartments.
-- **F_n** (non-insulated) — newly settled hyphae. λ fraction participates in uptake. Converts to F_i via insulation (rate ζ). Can be mobilized back to F_m.
+- **F_n** (non-insulated) — newly settled hyphae. λ fraction participates in uptake. A fraction ζ of what immobilizes into F_n is routed to F_i instead. Can be mobilized back to F_m.
 - **F_i** (insulated) — old hyphae coated by new growth and EPS. Primary contributor to uptake. Dies at rate μ_F. Binds mineral particles (aggregate stability).
 
 ### Transitions
@@ -131,15 +131,27 @@ Three compartments capture the biology of fungal hyphae:
 The mobile-to-immobile ratio Π = F_m/(F_i + F_n + ε_F) controls direction:
 
 ```
-net_i = η · (β_i·Π − α_i·Π^δ) · F_i
-net_n = η · (β_n·Π − α_n·Π^δ) · F_n
+net_i = (α_i·Π^δ − β_i·Π) · F_i        α = immobilization (GAIN, carries δ)
+net_n = (α_n·Π^δ − β_n·Π) · F_n        β = mobilization  (LOSS, linear in Π)
 ```
 
-When Π is small (low mobile fraction), net terms are positive (immobilization — F_m → F_i or F_n). When Π is large (high mobile fraction), the α·Π^δ term dominates and net terms are negative (mobilization — F_i or F_n → F_m). The exponent δ > 1 creates a nonlinear threshold.
+Sign convention: **positive = net immobilization** (F_m → sessile), negative = net mobilization. The gain carries the exponent, so when mobile biomass is abundant (Π large) network-building accelerates superlinearly for δ > 1; when it is scarce the linear loss term dominates and the sessile pools give biomass back. This is Falconer (2005) eq. 2.4 / (2008) Box 1 — see `dev_notes/falconer_answers.md` §B1.
 
-The conversion efficiency η < 1 means (1−η) of transferred biomass is lost to respiration. This respiration (Resp_F^conv) uses **abs()** on the net transfer sum to ensure it is always positive, regardless of transfer direction.
+With β = 0 (the current default) there is no mobilization at all and the sessile pools cannot give biomass back. That reproduces the MATLAB reference exactly and is a strict special case of Falconer, not Falconer.
 
-One-way insulation: trans_ni = ζ·F_n (F_n → F_i), not reversible.
+The conversion efficiency η < 1 means (1−η) of transferred biomass is lost to respiration:
+
+```
+trans_i = η·net_i                      trans_n = η·net_n
+immobil_i = trans_i + ζ·trans_n        immobil_n = (1−ζ)·trans_n
+Resp_F^conv = (1−η)·|net_i + net_n|
+```
+
+Resp_F^conv uses **abs()** so it stays positive regardless of transfer direction.
+
+ζ is a **dimensionless splitting fraction**, not a rate: it decides how much of the F_n tendency is routed to F_i instead. It is not an independent drain, so it cancels out of total fungal carbon — see REFERENCE §14.
+
+*Corrected 2026-07-28: this section previously had α and β swapped, put η inside `net`, and described `trans_ni = ζ·F_n` as a one-way insulation rate — a formulation deleted from the code in February 2026.*
 
 ---
 
@@ -312,7 +324,7 @@ At each grid node independently:
 2. Compute all uptake rates (R_B, R_F), maintenance (R_Bb)
 3. Determine growth/starvation regime
 4. Compute assimilation (Γ_B, Γ_E, Γ_F), respiration (Resp_B, Resp_F)
-5. Compute fungal transitions (net_i, net_n, trans_ni) and Resp_F_conv
+5. Compute fungal transitions (immobil_i, immobil_n) and Resp_F_conv
 6. Compute recycling (R_rec_B, R_rec_F, R_rec_E)
 7. Compute MAOC dynamics (M_eq, J_M)
 8. Assemble source terms (S_C, S_B, S_Fi, S_Fn, S_Fm, S_E, S_M, S_O)

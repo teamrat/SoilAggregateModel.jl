@@ -240,4 +240,94 @@ import SoilAggregateModel: crank_nicolson_step!, BoundaryCondition,
 
         # No crashes = success!
     end
+
+    # === Test 6: EXACT discrete flux balance at the Neumann boundary ===
+    #
+    # Test 2 above asserts only `mass_final > mass_initial`, which passes for
+    # ANY inflow magnitude — a factor-of-2 error in the ghost
+    # spacing (the source docstring says 2h, the code uses h) was invisible.
+    #
+    # The scheme injects exactly 4π·r_0²·J per unit time through the inner face,
+    # so with a zero-flux outer boundary the mass gain is known in closed form.
+    # Verified against an independent reimplementation: agreement to 7e-13.
+    @testset "Neumann flux BC — exact discrete mass injection" begin
+        n = 50
+        r_0 = 0.1
+        r_max = 2.0
+        h = (r_max - r_0) / (n - 1)
+        r_grid = [r_0 + i*h for i in 0:n-1]
+
+        u = fill(0.1, n)
+        D = fill(1.0, n)
+        J = 0.5
+        dt_half = 0.005
+        n_steps = 50
+
+        lower = zeros(n-1); diag = zeros(n); upper = zeros(n-1); rhs = zeros(n)
+        W = [4.0 * π * r_grid[i]^2 * h for i in 1:n]
+        mass_initial = sum(u .* W)
+
+        for _ in 1:n_steps
+            crank_nicolson_step!(u, D, dt_half, r_grid, h, lower, diag, upper, rhs,
+                                 neumann_flux, neumann_zero, J, 0.0)
+        end
+
+        mass_final = sum(u .* W)
+        expected_gain = 4.0 * π * r_0^2 * J * dt_half * n_steps
+
+        @test mass_final - mass_initial ≈ expected_gain rtol=1e-9
+    end
+
+    # === Test 7: analytic steady state under flux-in / Dirichlet-out ===
+    #
+    # This is requirement (2) from the architecture review quoted verbatim in
+    # the header of test_tridiagonal.jl. It was specified and never implemented.
+    #
+    #     u(r) = u_out + (J·r_0²/D)·(1/r − 1/r_max)
+    #
+    # Uses theta = 1.0 (Backward Euler) purely to reach steady state quickly —
+    # the steady state solves L[u] = 0 and is independent of theta. This is also
+    # the only test in the suite that exercises the theta = 1.0 path, which
+    # diffusion_step.jl uses for oxygen.
+    #
+    # Verified against an independent reimplementation: max relative error
+    # 1.256e-2 (n=50), 3.190e-3 (n=100), 7.970e-4 (n=200) — second order.
+    @testset "Analytic spherical steady state (Neumann flux + Dirichlet)" begin
+        r_0 = 0.1
+        r_max = 2.0
+        J = 0.5
+        D_const = 1.0
+        u_out = 0.0
+
+        errors = Float64[]
+
+        for n in (50, 100, 200)
+            h = (r_max - r_0) / (n - 1)
+            r_grid = [r_0 + i*h for i in 0:n-1]
+            u = fill(u_out, n)
+            D = fill(D_const, n)
+            lower = zeros(n-1); diag = zeros(n); upper = zeros(n-1); rhs = zeros(n)
+
+            # Backward Euler to steady state (converges in ~12 steps; 60 is ample)
+            for _ in 1:60
+                crank_nicolson_step!(u, D, 5.0, r_grid, h, lower, diag, upper, rhs,
+                                     neumann_flux, dirichlet, J, u_out; theta=1.0)
+            end
+
+            analytic = [u_out + (J * r_0^2 / D_const) * (1.0/r_grid[i] - 1.0/r_max)
+                        for i in 1:n]
+            # Outer node is the Dirichlet value itself (analytic = 0 there)
+            rel_err = maximum(abs(u[i] - analytic[i]) / analytic[i] for i in 1:n-1)
+            push!(errors, rel_err)
+        end
+
+        # Absolute accuracy at the coarsest grid
+        @test errors[1] < 0.02
+
+        # Second-order spatial convergence: halving h must cut the error ~4x.
+        # Anything materially below 3.5 means the operator or a boundary row is
+        # not second-order accurate.
+        @test errors[1] / errors[2] > 3.5
+        @test errors[2] / errors[3] > 3.5
+    end
 end

@@ -2,6 +2,7 @@
 # Tests for post-processing functions
 
 using Test
+import SoilAggregateModel: compute_source_terms, _prepare_environment
 
 @testset "Post-processing" begin
     bio = BiologicalProperties()
@@ -179,19 +180,85 @@ using Test
         @test length(cue.CUE_B) == result.grid.n
         @test length(cue.CUE_F) == result.grid.n
 
-        # Check bounds: 0 ≤ CUE ≤ 1 (with tolerance for very small biomass)
-        @test all(cue.CUE_B .>= -1e-10)  # Relaxed tolerance for low-biomass regime
+        # Bounds. CUE_B = Γ_B / R_B, and
+        #     Γ_B = Y_B·softplus(R_diff)·(1-γ) - softplus(-R_diff),  R_diff = R_B - R_Bb
+        # so where basal maintenance R_Bb exceeds uptake R_B the numerator is
+        # negative by construction: the cell is respiring its own biomass to pay
+        # maintenance. A negative CUE_B is the correct signature of that state,
+        # not an error — it happens at outer nodes where DOC is depleted.
+        # Only the upper bound is a genuine physical limit.
+        @test all(isfinite.(cue.CUE_B))
         @test all(cue.CUE_B .<= 1.0 + 1e-10)
+        # Nodes with net-positive uptake must still have non-negative CUE
+        @test any(cue.CUE_B .>= -1e-10)
         @test all(cue.CUE_F .>= -1e-10)
         @test all(cue.CUE_F .<= 1.0 + 1e-10)
 
-        # Fungal CUE should be approximately constant (≈ Y_F)
-        Y_F = result.params.bio.Y_F
+        # Fungal CUE tracks the SPACE-LIMITED yield, not the base yield:
+        #     Y_F = Y_F_base · F_S / (F_i + F_n + F_m + F_S)
+        # (manuscript_changes.md §3). Comparing against bio.Y_F alone only ever
+        # passed because total fungal biomass was negligible.
+        bio_p = result.params.bio
         for i in 1:result.grid.n
             if rec.state.F_i[i] > 1e-10
-                # Should be close to Y_F (fixed yield)
-                @test abs(cue.CUE_F[i] - Y_F) < 0.1  # Within 10%
+                F_total = rec.state.F_i[i] + rec.state.F_n[i] + rec.state.F_m[i]
+                Y_F_expected = bio_p.Y_F * bio_p.F_S / (F_total + bio_p.F_S)
+                @test abs(cue.CUE_F[i] - Y_F_expected) < 0.05
             end
+        end
+    end
+end
+
+
+# ============================================================================
+# Post-processing must agree with the solver
+#
+# `respiration_rates` and `carbon_use_efficiency` re-derive R_B, R_F and the
+# fungal transitions from the stored state. That is a second implementation of
+# what `compute_source_terms` does, so the two can diverge in the definitions
+# they share — C_aq, O_aq, the ζ clamp — while every structural, non-negativity
+# and self-sum assertion in this file still passes.
+#
+# This testset is the oracle: it compares the re-derivation against the solver's
+# own function, node by node, at machine precision, and carries no expected
+# values of its own. See REFERENCE.md §26 for what it caught.
+# ============================================================================
+@testset "Post-processing agrees with compute_source_terms" begin
+    bio = BiologicalProperties()
+    soil = SoilProperties()
+    T(t) = 293.15
+    ψ(t) = -10.0
+    O2(t) = 0.3
+
+    result = run_aggregate(bio, soil, T, ψ, O2, (0.0, 30.0);
+                           n_grid=30, output_times=Float64.(0:1:30))
+
+    for idx in (2, 15, 31)                     # early, mid, late
+        rec  = result.outputs[idx]
+        ev   = _prepare_environment(rec, result.grid, result.params, result.env)
+        resp = respiration_rates(rec, result.grid, result.params, result.env)
+
+        for i in 1:result.grid.n
+            src = compute_source_terms(rec.state.C[i], rec.state.B[i],
+                                       rec.state.F_n[i], rec.state.F_m[i],
+                                       rec.state.F_i[i], rec.state.E[i],
+                                       rec.state.M[i], rec.state.O[i],
+                                       ev.θ[i], ev.θ_a[i], ev.ψ,
+                                       result.params.bio, result.params.soil,
+                                       ev.f_T)
+            @test resp.Resp_total[i] ≈ src.Resp_total rtol=1e-12
+        end
+    end
+
+    # aqueous_concentrations must use the solver's C_aq definition too
+    @testset "C_aq / O_aq match the solver" begin
+        rec = result.outputs[15]
+        ev  = _prepare_environment(rec, result.grid, result.params, result.env)
+        aq  = aqueous_concentrations(rec, result.grid, result.params, result.env)
+        for i in 1:result.grid.n
+            @test aq.C_aq[i] ≈ rec.state.C[i] /
+                  (ev.θ[i] + result.params.soil.ρ_b * result.params.soil.k_d_eq) rtol=1e-14
+            @test aq.O_aq[i] == rec.state.O[i]
         end
     end
 end

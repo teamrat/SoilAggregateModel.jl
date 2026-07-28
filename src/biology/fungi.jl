@@ -284,11 +284,15 @@ MATLAB (single_aggregate_beta.m, lines 389-390):
     immobil_i = α_i·Π·F_i + ζ·α_n·Π·F_n
     immobil_n = (1-ζ)·α_n·Π·F_n
 
-Generalized with mobilization (Falconer's β terms and δ exponent):
-    net_i = η·(β_i·Π - α_i·Π^δ)·F_i
-    net_n = η·(β_n·Π - α_n·Π^δ)·F_n
+Generalized to Falconer's full form (eq. 2.4 / Box 1), with the exponent on
+the IMMOBILIZATION (gain) term and mobilization linear:
+    net_i = η·(α_i·Π^δ - β_i·Π)·F_i
+    net_n = η·(α_n·Π^δ - β_n·Π)·F_n
     immobil_i = net_i + ζ·net_n
     immobil_n = (1-ζ)·net_n
+Both are SIGNED: when β·Π exceeds α·Π^δ the pool mobilizes back into F_m,
+which is F_n's only sink (Falconer gives b_n no death term — see
+dev_notes/falconer_answers.md §C1).
 
 Source terms (reactions.jl):
     S_Fi = immobil_i - R_rec_F
@@ -298,10 +302,10 @@ Source terms (reactions.jl):
 # Arguments
 - `F_i`, `F_n`, `F_m`: Three fungal pools [μg/mm³]
 - `Π`: Mobile-to-immobile ratio (from Pi_protected) [-]
-- `α_i_T`, `α_n_T`: Mobilization rates at current T [1/day]
-- `β_i_T`, `β_n_T`: Immobilization rates at current T [1/day]
+- `α_i_T`, `α_n_T`: Immobilization (gain) rates at current T [1/day]
+- `β_i_T`, `β_n_T`: Mobilization (loss) rates at current T [1/day]
 - `ζ_T`: Insulation splitting fraction at current T [-] (NOT a rate!)
-- `δ`: Mobilization exponent [-] (δ > 1)
+- `δ`: Immobilization exponent, Falconer's θ [-] (θ > 1)
 - `η`: Conversion efficiency [-] (η < 1)
 - `ε_F`: Regularization for Π [μg/mm³]
 
@@ -309,18 +313,24 @@ Source terms (reactions.jl):
 - **CRITICAL**: Resp_F_conv uses abs() (MANUSCRIPT_CHANGES #2)
 - **CRITICAL**: ζ is a splitting fraction, NOT an independent sink
   (see julia_falconer_deviations.md, Deviation #2)
-- When Π is large: immobilization dominates (β·Π > α·Π^δ)
-- When Π is small: mobilization dominates (α·Π^δ > β·Π)
+- When Π is large: immobilization dominates (α·Π^δ > β·Π, since δ > 1)
+- When Π is small: mobilization dominates (β·Π > α·Π^δ)
+  This ordering is what makes the system retreat gracefully as substrate is
+  exhausted. With the exponent on the loss term instead, large Π drives
+  runaway mobilization and both sessile pools collapse irreversibly to zero.
 - Conversion cost (1-η) applies to both directions
 - All rates scale with Arrhenius factor (already applied)
 """
 function fungal_transitions(F_i::Real, F_n::Real, F_m::Real, Π::Real,
                            α_i_T::Real, α_n_T::Real, β_i_T::Real, β_n_T::Real,
                            ζ_T::Real, δ::Real, η::Real, ε_F::Real)
-    # Net transition rates (positive = immobilization, negative = mobilization)
+    # Net SIGNED tendency, Falconer (2005) eq. 2.4:  γ(α·π^θ − β·π)·b
+    #   α (immobilization, the gain) carries the exponent
+    #   β (mobilization, the loss) is linear in Π
+    # positive = net immobilization, negative = net mobilization.
     Π_delta = Π^δ
-    net_i = (β_i_T * Π - α_i_T * Π_delta) * F_i
-    net_n = (β_n_T * Π - α_n_T * Π_delta) * F_n
+    net_i = (α_i_T * Π_delta - β_i_T * Π) * F_i
+    net_n = (α_n_T * Π_delta - β_n_T * Π) * F_n
 
     # Retained fractions after conversion cost
     trans_i = η * net_i

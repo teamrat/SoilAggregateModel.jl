@@ -27,8 +27,13 @@ Tests for parameters.jl
     # Reference temperature should be ~293 K (20°C)
     @test bio.T_ref ≈ 293.15
 
-    # Delta should be > 1
-    @test bio.delta > 1.0
+    # δ is the exponent on Π in the immobilization (gain) term. The invariant
+    # is δ > 0: at δ = 0 the gain stops depending on Π at all, and at δ < 0 it
+    # diverges as Π → 0. Whether the DEFAULT should be 1.0 (MATLAB / Falconer's
+    # linear control) or 3.0 (Falconer's nonlinear runs) is a modelling choice,
+    # not an invariant — it is recorded in REFERENCE.md §5a and must not be
+    # re-encoded as an assertion here.
+    @test bio.delta > 0.0
 
     # Efficiency should be between 0 and 1
     @test 0.0 < bio.η_conv <= 1.0
@@ -93,9 +98,15 @@ end
     @test 0.0 < soil.D_B_rel < 0.1
 
     # Aggregate stability parameters
-    @test soil.k_F > 0.0
-    @test soil.χ > 0.0
-    @test soil.a_p > 0.0
+    # Aggregate stability. κ_b and w_E are FITTED — assert only what must hold
+    # for any valid parameter set, not the particular values (see REFERENCE §5a).
+    @test soil.κ_b > 0.0        # G_c = τ_w·d_32/κ_b is undefined otherwise
+    @test soil.w_E > 0.0        # EPS cannot have negative binding value
+
+    # d_32 is in MILLIMETRES. The upper bound is the sand class ceiling and
+    # exists to catch a µm/mm unit slip, which would otherwise silently scale
+    # the aggregation threshold by 1000.
+    @test 0.0 < soil.d_32 < 2.0
 end
 
 @testset "SoilProperties custom values" begin

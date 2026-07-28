@@ -42,3 +42,6 @@ paper/de_gryze/*.pdf
 
 # Claude Code local settings
 .claude/
+
+# Local pre-patch backups
+_backup_*/

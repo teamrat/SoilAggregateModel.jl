@@ -51,13 +51,18 @@ struct BiologicalProperties
     Ea_F::Float64           # Activation energy [J/mol] — shared by ALL fungal rates
 
     # --- Fungal transitions ---
-    α_i::Float64            # Mobilization rate, insulated [1/day]
-    α_n::Float64            # Mobilization rate, non-insulated [1/day]
-    β_i::Float64            # Immobilization rate, insulated [1/day]
-    β_n::Float64            # Immobilization rate, non-insulated [1/day]
-    delta::Float64          # Mobilization exponent (δ > 1) [-]
-    η_conv::Float64         # Conversion efficiency [-]
-    ζ::Float64              # Insulation rate F_n → F_i [1/day]
+    # Falconer (2005) eq. 2.4 / (2008) Box 1 naming — γ(α·π^θ − β·π)·b :
+    #   α = IMMOBILIZATION (mobile → sessile; the GAIN; carries the exponent)
+    #   β = MOBILIZATION   (sessile → mobile; the LOSS; linear in Π)
+    # These two were inverted before 2026-07, which is how the exponent came
+    # to sit on the loss term. See dev_notes/falconer_answers.md §B1, §B3.
+    α_i::Float64            # Immobilization rate, insulated [1/day] (Falconer α_i)
+    α_n::Float64            # Immobilization rate, non-insulated [1/day] (Falconer α_n)
+    β_i::Float64            # Mobilization rate, insulated [1/day] (Falconer β_i)
+    β_n::Float64            # Mobilization rate, non-insulated [1/day] (Falconer β_n)
+    delta::Float64          # Immobilization exponent — Falconer's θ (θ > 1) [-]
+    η_conv::Float64         # Conversion efficiency — Falconer's γ [-]
+    ζ::Float64              # Insulation SPLITTING FRACTION on the F_n tendency [-] — NOT a rate
     λ::Float64              # Fraction of F_n at uptake surfaces [-]
     D_Fn0::Float64          # Hyphal extension diffusivity at T_ref [mm²/day]
     D_Fm0::Float64          # Internal translocation rate at T_ref [mm²/day]
@@ -136,17 +141,17 @@ function BiologicalProperties(;
     Ea_F = 55_000.0,
 
     # Fungal transitions (from REFERENCE.md)
-    α_i = 0.0,      # no mobilization (MATLAB: beta_i = 0)
-    α_n = 0.0,      # no mobilization (MATLAB: beta_n = 0)
-    β_i = 0.1,      # immobilization to insulated (MATLAB: alpha_i = 0.1)
-    β_n = 0.15,     # immobilization to non-insulated (MATLAB: alpha_n = 0.15)
-    delta = 1.0,    # linear (MATLAB: delta = 1)
-    #α_i = 0.1,
-    #α_n = 0.15,
-    #β_i = 0.0,
-    #β_n = 0.15,         # was 0.0. Immobilization rate, non-insulated [1/day]
-    #delta = 2.0,
-    η_conv = 0.8,
+    # Falconer naming: α = immobilization (gain), β = mobilization (loss).
+    # These values reproduce the MATLAB reference exactly — MATLAB is Falconer
+    # with θ = 1 and β = 0, i.e. a strict special case. Turning mobilization on
+    # (β > 0) and raising delta are now two independent, deliberate knobs.
+    α_i = 0.1,      # immobilization to insulated     (MATLAB: alpha_i = 0.1)
+    α_n = 0.15,     # immobilization to non-insulated (MATLAB: alpha_n = 0.15)
+    β_i = 0.0,      # mobilization from insulated     (MATLAB: beta_i = 0)
+    β_n = 0.0,      # mobilization from non-insulated (MATLAB: beta_n = 0)
+    delta = 1.0,    # Falconer's θ. MATLAB uses 1 (linear); Falconer's
+                    # nonlinear runs use θ = 3.0 (falconer_answers.md §B2)
+    η_conv = 0.8,   # Falconer's γ
     ζ = 0.2,
     λ = 0.05,
     D_Fn0 = 0.01,
@@ -235,10 +240,10 @@ struct SoilProperties
     D_O2_a_ref::Float64     # O₂ in air
     D_B_rel::Float64        # Bacterial motility relative to D_C [-]
 
-    # Aggregate stability
-    k_F::Float64            # Specific binding strength [Pa/(μg/mm³)]
-    χ::Float64              # [UNUSED] Was particle adhesion length; no longer in stability criterion
-    a_p::Float64            # Particle radius [mm]
+    # Aggregate stability (see docs/REFERENCE.md §4.4)
+    κ_b::Float64            # Specific binding strength per unit binder C [Pa·mm/(μg/mm³)]
+    w_E::Float64            # EPS binding weight relative to F_i, per unit C [-]
+    d_32::Float64           # Sauter mean particle diameter [mm]
 end
 
 """
@@ -279,10 +284,14 @@ function SoilProperties(;
     D_O2_a_ref = 1.52e6,     # O₂ in air: from REFERENCE.md (Chapman-Enskog)
     D_B_rel = 0.001,         # Bacterial motility << DOC diffusion
 
-    # Aggregate stability
-    k_F = 2.25,         # [Pa/(μg/mm³)] — scaling: σ_h·d_p/(4·ρ_h) ≈ 30e6·30e-6/(4·100)
-    χ = 0.001,          # [mm] [UNUSED] — retained for struct compatibility
-    a_p = 0.01          # [mm]
+    # Aggregate stability — τ_c = (κ_b/d_32)·(F_i + w_E·E) ≥ τ_w. See §4.4/§5a.
+    # BOTH κ_b AND w_E ARE FITTED. Neither is derived; the bond-counting argument
+    # fixes the FORM (strength ∝ binder concentration / particle size) and not the
+    # coefficients. d_32 is a measured soil property — compute it with
+    # `sauter_from_texture` and override it for every real problem.
+    κ_b = 0.0143869,    # [Pa·mm/(μg/mm³)] fitted — see §5a for provenance
+    w_E = 0.5,          # [-] fitted; was hard-coded in aggregate_radius.jl before 2026-07
+    d_32 = 0.01         # [mm] NOMINAL placeholder — override per soil
 )
     SoilProperties(
         θ_r, θ_s, α_vg, n_vg,
@@ -290,6 +299,6 @@ function SoilProperties(;
         k_d_eq, ρ_b,
         M_max, k_L, n_LF, k_ma, f_clay_silt,
         D_C0_ref, D_O2_w_ref, D_O2_a_ref, D_B_rel,
-        k_F, χ, a_p
+        κ_b, w_E, d_32
     )
 end

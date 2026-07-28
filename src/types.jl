@@ -5,6 +5,14 @@ Core type definitions for the soil aggregate biogeochemical model.
 
 All types follow the architecture specification (ARCHITECTURE_CLAUDE_CODE.md).
 Units: μg/mm³ (= kg/m³), mm, days, kPa, K, J/mol throughout.
+
+# Fill convention
+
+Every pre-allocated array is filled with `NaN` — never zero, never `undef`.
+On any correct path each array is written before it is read, so a `NaN`
+surviving into a result means a path skipped its initialisation. `NaN`
+propagates and fails; zero does not. A zero pool reads as empty-but-valid and a
+zero diffusivity silently stops transport.
 """
 
 #═══════════════════════════════════════════════════════════════════════════════
@@ -101,19 +109,22 @@ end
 """
     AggregateState(n::Int)
 
-Create an AggregateState with uninitialized vectors of length `n`.
-Use `initialize_state!` to populate with initial conditions.
+Create an AggregateState for `n` grid points, NaN-filled. Populate with
+`create_initial_state`, which assigns all eight pools plus `P`, `P_0` and
+`CO2_cumulative`.
+
+`P_0` must be positive before integrating; `run_simulation` throws otherwise.
 """
 function AggregateState(n::Int)
     AggregateState(
-        Vector{Float64}(undef, n),  # C
-        Vector{Float64}(undef, n),  # B
-        Vector{Float64}(undef, n),  # F_n
-        Vector{Float64}(undef, n),  # F_m
-        Vector{Float64}(undef, n),  # O
-        Vector{Float64}(undef, n),  # F_i
-        Vector{Float64}(undef, n),  # E
-        Vector{Float64}(undef, n),  # M
+        fill(NaN, n),  # C
+        fill(NaN, n),  # B
+        fill(NaN, n),  # F_n
+        fill(NaN, n),  # F_m
+        fill(NaN, n),  # O
+        fill(NaN, n),  # F_i
+        fill(NaN, n),  # E
+        fill(NaN, n),  # M
         0.0,                        # P
         0.0,                        # P_0
         0.0                         # CO2_cumulative
@@ -172,21 +183,21 @@ end
 """
     Workspace(n::Int)
 
-Create a Workspace with pre-allocated arrays for `n` grid points.
+Create a Workspace with pre-allocated arrays for `n` grid points, NaN-filled.
 """
 function Workspace(n::Int)
     Workspace(
-        Vector{Float64}(undef, n-1),  # lower
-        Vector{Float64}(undef, n),    # diag
-        Vector{Float64}(undef, n-1),  # upper
-        Vector{Float64}(undef, n),    # rhs
-        Vector{Float64}(undef, n),    # θ
-        Vector{Float64}(undef, n),    # θ_a
-        Vector{Float64}(undef, n),    # D_C
-        Vector{Float64}(undef, n),    # D_B
-        Vector{Float64}(undef, n),    # D_Fn
-        Vector{Float64}(undef, n),    # D_Fm
-        Vector{Float64}(undef, n),    # D_O
+        fill(NaN, n-1),  # lower
+        fill(NaN, n),    # diag
+        fill(NaN, n-1),  # upper
+        fill(NaN, n),    # rhs
+        fill(NaN, n),    # θ
+        fill(NaN, n),    # θ_a
+        fill(NaN, n),    # D_C
+        fill(NaN, n),    # D_B
+        fill(NaN, n),    # D_Fn
+        fill(NaN, n),    # D_Fm
+        fill(NaN, n),    # D_O
         TemperatureCache()             # f_T
     )
 end
