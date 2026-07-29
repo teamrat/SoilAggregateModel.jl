@@ -16,17 +16,29 @@ Fields:
 - `S_M`: MAOC source/sink
 - `S_O`: Oxygen source/sink
 - `Resp_total`: Total respiration (for CO₂ accumulation) [μg-C/mm³/day]
+
+Parametric in the element type so the same function serves both the
+operator-split solver (`Float64`) and the method-of-lines right-hand side,
+whose Jacobian is built by forward-mode AD and therefore evaluates every rate
+law on dual numbers. A hard-coded `Float64` here would silently force the stiff
+solver onto finite differences.
 """
-struct SourceTerms
-    S_C::Float64
-    S_B::Float64
-    S_Fn::Float64
-    S_Fm::Float64
-    S_Fi::Float64
-    S_E::Float64
-    S_M::Float64
-    S_O::Float64
-    Resp_total::Float64
+struct SourceTerms{T<:Real}
+    S_C::T
+    S_B::T
+    S_Fn::T
+    S_Fm::T
+    S_Fi::T
+    S_E::T
+    S_M::T
+    S_O::T
+    Resp_total::T
+end
+
+function SourceTerms(S_C::Real, S_B::Real, S_Fn::Real, S_Fm::Real, S_Fi::Real,
+                     S_E::Real, S_M::Real, S_O::Real, Resp_total::Real)
+    v = promote(S_C, S_B, S_Fn, S_Fm, S_Fi, S_E, S_M, S_O, Resp_total)
+    return SourceTerms{typeof(v[1])}(v...)
 end
 
 """

@@ -79,4 +79,12 @@ using SoilAggregateModel
     @testset "Population Upscaling" begin
         include("test_population.jl")
     end
+
+    @testset "Method of Lines" begin
+        include("test_mol.jl")
+    end
+
+    @testset "Carbon Closure" begin
+        include("test_closure.jl")
+    end
 end

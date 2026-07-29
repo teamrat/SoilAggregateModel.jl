@@ -3,13 +3,21 @@
 
 Biogeochemical model for soil aggregate formation and carbon cycling.
 
-Spherical reaction-diffusion system with Strang splitting:
-- 9 state variables (5 diffusing, 3 immobile ODEs, 1 scalar ODE)
-- Custom Crank-Nicolson solver (Thomas algorithm)
-- Zero-allocation hot loop
+Spherical reaction-diffusion system, 9 state variables (5 diffusing, 3
+immobile ODEs, 1 scalar ODE), integrated by either of two solvers over one
+shared set of physics functions:
+
+- [`run_aggregate_stiff`](@ref) — **default.** Method of lines, implicit stiff
+  solver, sparse Jacobian. 45 days in 1.6 s / 2088 steps.
+- [`run_aggregate`](@ref) — reference implementation. Strang splitting,
+  Crank-Nicolson diffusion, Forward Euler reactions. 45 days in 38 s / 391773
+  steps, because the explicit reaction bounds the step by stability rather than
+  accuracy. Kept as a cross-check and for its independent carbon-closure probe.
+
+Both call the same physics functions; only the time integration differs.
+See docs/REFERENCE.md §17a and §20a.
 
 # Main API
-- [`run_aggregate`](@ref): Run aggregate simulation with environmental forcings
 - [`BiologicalProperties`](@ref): Biological parameters
 - [`SoilProperties`](@ref): Soil physical/chemical properties
 
@@ -17,6 +25,12 @@ Spherical reaction-diffusion system with Strang splitting:
 μg/mm³ (≡ kg/m³), mm, days, kPa, K, J/mol throughout.
 """
 module SoilAggregateModel
+
+using SparseArrays: SparseMatrixCSC, sparse, nonzeros, nnz
+using LinearSolve: KLUFactorization
+using OrdinaryDiffEqBDF: FBDF
+using OrdinaryDiffEqSDIRK: KenCarp47
+using SciMLBase: ODEFunction, ODEProblem, solve
 
 # Include all source files in dependency order
 include("constants.jl")
@@ -58,6 +72,8 @@ include("solver/diffusion_step.jl")
 include("solver/reaction_step.jl")
 include("solver/workspace_updates.jl")
 include("solver/timestepper.jl")
+include("solver/mol.jl")
+include("solver/mol_solve.jl")
 
 # API
 include("api.jl")
@@ -75,7 +91,8 @@ export BiologicalProperties, SoilProperties
 export InitialConditions
 export AggregateState, OutputRecord
 export GridInfo, ParameterSet, SimulationResult, IntegratedPools
-export run_aggregate
+export run_aggregate, run_aggregate_stiff, mol_jacobian_prototype
+export FBDF, KenCarp47, KLUFactorization
 export sauter_mean_diameter, sauter_from_texture, TEXTURE_CLASS_DIAMETERS
 export domain_tessellation, pom_population, log_interpolate_fraction
 export van_genuchten, van_genuchten_inverse

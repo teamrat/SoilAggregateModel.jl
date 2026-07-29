@@ -1,5 +1,9 @@
 # api.jl
-# User-facing API for running aggregate simulations
+# User-facing API for running aggregate simulations.
+#
+# `run_aggregate` here is the Strang-split REFERENCE implementation.
+# `run_aggregate_stiff` (solver/mol_solve.jl) is the default workhorse.
+# See the header of solver/timestepper.jl for why both are kept.
 
 """
     run_aggregate(bio::BiologicalProperties, soil::SoilProperties,
@@ -10,7 +14,14 @@
                   dt_initial::Real=0.01, dt_min::Real=1e-4, dt_max::Real=0.1,
                   output_times::Vector{<:Real}=Float64[])
 
-Run a soil aggregate biogeochemical simulation.
+Run a soil aggregate biogeochemical simulation with the Strang-split solver.
+
+!!! note "This is the reference implementation, not the default"
+    [`run_aggregate_stiff`](@ref) is the default workhorse — 24x faster over
+    45 days and 188x fewer steps, because an implicit method sizes its step
+    from accuracy rather than from an explicit-reaction stability guard. Use
+    this one to cross-check, or when you want the independent carbon-closure
+    probe described in `docs/REFERENCE.md` 17a. Both call the same physics.
 
 # Arguments
 - `bio::BiologicalProperties`: Biological parameters

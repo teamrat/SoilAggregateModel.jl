@@ -1,5 +1,27 @@
 # timestepper.jl
-# Main time-stepping loop with Strang splitting and adaptive timestep
+# Strang-split time stepping. REFERENCE IMPLEMENTATION, not the default.
+#
+# `run_aggregate_stiff` (solver/mol_solve.jl) is the default workhorse: 24x
+# faster over 45 days, 188x fewer steps, and its step GROWS through a run where
+# this one is pinned at its floor with the step its own criterion demands still
+# falling. Measured, REFERENCE.md 20a.
+#
+# This path is kept, and should not be deleted, for two reasons:
+#
+#   1. It computes cumulative respired carbon independently, by accumulating
+#      Resp_total, where the stiff path recovers it from the carbon balance.
+#      That independence is what makes its balance error an actual probe of the
+#      closure identity rather than a tautology (REFERENCE.md 17a). Once
+#      test/test_closure.jl is trusted this becomes a redundancy rather than the
+#      only line of defence — but redundancy on the model's central invariant is
+#      worth keeping.
+#   2. Two independent integrators over shared physics are the only convergence
+#      evidence this model has. They agree at day 45 on every reported quantity
+#      (r_agg to 7 figures, CO2 to 2e-5) and disagree by 9.6% on DOC at the
+#      POM-adjacent nodes, which is a finding neither could produce alone.
+#
+# Do not add features here without adding them to the stiff path. They share
+# every physics function; they must not diverge in what they model.
 
 """
     run_simulation(state::AggregateState, workspace::Workspace,

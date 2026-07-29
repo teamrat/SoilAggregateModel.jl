@@ -278,7 +278,11 @@ function run_diameter_sweep(diam_all, bio, soil, T_func, ψ_func, O2_func;
                             ic=nothing,
                             ω::Real=1.0,
                             snap_times::Vector{Float64}=Float64[],
+                            solver::Symbol=:stiff,
                             output_dir::String="")
+
+    solver in (:stiff, :split) || throw(ArgumentError(
+        "solver must be :stiff (default) or :split (reference implementation), got $(solver)"))
 
     all_timeseries = DataFrame[]
     all_snapshots  = DataFrame[]
@@ -300,18 +304,29 @@ function run_diameter_sweep(diam_all, bio, soil, T_func, ψ_func, O2_func;
         r_max = diam * domain_factor / 2.0
         P_0   = (4.0/3.0) * π * r_0^3 * ρ_POM
 
-        # Run single-aggregate simulation
-        result = run_aggregate(bio, soil, T_func, ψ_func, O2_func, (0.0, t_max);
-                               n_grid=n_grid, r_0=r_0, r_max=r_max,
-                               ic=ic, P_0=P_0, ω=ω,
-                               dt_max=dt_max, dt_min=dt_min,
-                               output_times=output_times)
+        # Run single-aggregate simulation. :stiff is the default workhorse;
+        # :split is the reference implementation kept for cross-checking and
+        # for its independent carbon-closure probe (REFERENCE.md §17a, §20a).
+        result = if solver === :stiff
+            run_aggregate_stiff(bio, soil, T_func, ψ_func, O2_func, (0.0, t_max);
+                                n_grid=n_grid, r_0=r_0, r_max=r_max,
+                                ic=ic, P_0=P_0, ω=ω,
+                                output_times=output_times)
+        else
+            run_aggregate(bio, soil, T_func, ψ_func, O2_func, (0.0, t_max);
+                          n_grid=n_grid, r_0=r_0, r_max=r_max,
+                          ic=ic, P_0=P_0, ω=ω,
+                          dt_max=dt_max, dt_min=dt_min,
+                          output_times=output_times)
+        end
 
         elapsed = time() - elapsed_start
-        n_steps = result.diagnostics["n_steps"]
+        n_steps = get(result.diagnostics, "n_accept", result.diagnostics["n_steps"])
 
         # Postprocess into DataFrame
         df = result_to_dataframe(result)
+        # NaN for :stiff by design — carbon closure there is structural, not
+        # measured. REFERENCE.md §17a.
         max_error = maximum(abs.(df.C_balance_error))
 
         # Prepend metadata columns so they appear first in the output.

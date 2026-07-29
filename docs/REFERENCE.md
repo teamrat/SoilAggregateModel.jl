@@ -38,9 +38,11 @@ The previously named `manuscript_updated.tex` does not exist.
 ### Part IV: Computational Methods
 16. [Softplus Regularization](#16-softplus-regularization)
 17. [Non-Negativity Clipping and CO₂ Correction](#17-non-negativity-clipping-and-co2-correction)
+17a. [Carbon Closure, and What Actually Verifies It](#17a-carbon-closure-and-what-actually-verifies-it)
 18. [Conservation Weights and Spherical Laplacian](#18-conservation-weights-and-spherical-laplacian)
 19. [Strang Splitting and POM-Diffusion Coupling](#19-strang-splitting-and-pom-diffusion-coupling)
 20. [Adaptive Timestepping](#20-adaptive-timestepping)
+20a. [Method of Lines and the Stiff Solver](#20a-method-of-lines-and-the-stiff-solver)
 21. [Sigmoid Threshold Functions](#21-sigmoid-threshold-functions)
 22. [Space-Limited Yield](#22-space-limited-yield)
 
@@ -1142,6 +1144,128 @@ Note that `clip_carbon` carries the **signed** (negative) value of the clipped p
 
 ---
 
+## 17a. Carbon Closure, and What Actually Verifies It
+
+### The identity
+
+The seven pool source terms must sum to minus total respiration, at every node,
+for any state:
+
+$$
+S_C + S_B + S_{F_n} + S_{F_m} + S_{F_i} + S_E + S_M = -\,\text{Resp}_\text{total}
+$$
+
+This is the model's carbon closure. It is a property of how the rate laws
+compose in `compute_source_terms`, **not** something any solver enforces. If it
+were broken — by a changed yield expression, a dropped recycling term, a sign
+error in a transition — every carbon number the model produces would be wrong,
+and nothing would raise an error.
+
+### Proof
+
+Summing the seven terms as written in `reactions.jl`:
+
+- `J_M` cancels between `S_C` and `S_M`.
+- `immobil_i` cancels between `S_{F_m}` and `S_{F_i}`; `immobil_n` between
+  `S_{F_m}` and `S_{F_n}`. Transitions move carbon between fungal pools and
+  create none.
+- `R_rec_total = R_rec_B + R_rec_F + R_rec_E` in `S_C` cancels the three
+  recycling losses.
+
+leaving $-R_B - R_F + \Gamma_B + \Gamma_F + \Gamma_E - \text{Resp}_{F,\text{conv}}$,
+so with $\text{Resp}_\text{total} = \text{Resp}_B + \text{Resp}_F + \text{Resp}_{F,\text{conv}}$
+the requirement splits in two.
+
+**Fungal**, exact by inspection:
+
+$$\Gamma_F - R_F = Y_F R_F - R_F = -(1-Y_F)R_F = -\text{Resp}_F$$
+
+**Bacterial.** With $x = R_B - R_{Bb}$ and $\sigma(\cdot) = \text{softplus}(\cdot,\varepsilon_Y)$,
+
+$$\Gamma_B + \Gamma_E = Y_B\sigma(x)(1-\gamma) - \sigma(-x) + Y_B\sigma(x)\gamma = Y_B\sigma(x) - \sigma(-x)$$
+
+and $\text{Resp}_B = R_{Bb} + \sigma(x)(1-Y_B)$. Requiring
+$\Gamma_B + \Gamma_E - R_B = -\text{Resp}_B$ reduces, after $Y_B\sigma(x)$
+cancels from both sides, to
+
+$$\sigma(x) - \sigma(-x) = x$$
+
+which holds **exactly, for any ε**:
+
+$$\varepsilon\ln\frac{1+e^{x/\varepsilon}}{1+e^{-x/\varepsilon}} = \varepsilon\ln e^{x/\varepsilon} = x$$
+
+The softplus regularisation (§16) therefore preserves the closure identically.
+That is not luck — it is the property $\max(0,x) - \max(0,-x) = x$ surviving the
+smoothing, and it is the reason ε can be chosen freely without breaking the
+carbon budget. **Any future replacement for softplus must satisfy the same
+antisymmetry relation.**
+
+The closure is exact analytically. In floating point it holds to roundoff.
+
+### What each solver's carbon balance actually tells you
+
+`compute_carbon_balance_error` reports
+$(P + \sum_i W_i \text{pools}_i + \text{CO}_2 - C_0)/C_0$. What that number means
+depends entirely on where CO₂ came from, and the two solvers differ.
+
+**Split solver — a real, if diluted, test.** It advances the pools by
+$\Delta t\,S_k$ and accumulates CO₂ separately as
+$\sum_i \Delta t\,\text{Resp}_i W_i$. These are two independent computations.
+The per-step change in the total is
+$\Delta t \sum_i W_i(\sum_k S_{k,i} + \text{Resp}_i)$, which vanishes **only if
+the closure identity holds**. Its measured $-5.1\times10^{-13}$ over 391,773
+steps is therefore evidence that the identity holds along the whole trajectory —
+roundoff on a quantity that would otherwise drift.
+
+Two parts of that number are vacuous and should not be credited: the spherical
+stencil telescopes (§18) so transport conserves by construction, and the POM→DOC
+transfer cancels by construction (§20a). A third part is worse than vacuous —
+the clipping correction (§17) adds clipped carbon back to CO₂, which restores
+the balance whether or not the clipping was physically right, and so masks
+closure violations wherever clipping is active.
+
+**Stiff solver — no test at all.** It recovers CO₂ as $C_0$ minus current total
+carbon (§20a). The balance is then identically zero by definition, which is why
+`mass_balance_error` is reported as `NaN` rather than `0.0`. Removing CO₂ from
+the state removed the independent computation that made the comparison mean
+something.
+
+### The three available tests, ranked
+
+1. **Pointwise identity.** Evaluate `compute_source_terms` at a node and assert
+   $|\sum_k S_k + \text{Resp}_\text{total}| \le 10^{-12}\times\text{scale}$.
+   Exact, no integration, no solver, microseconds, and it localises a failure to
+   a node and a state. This is the primary test and **it does not yet exist** —
+   none of the current assertions check it.
+
+2. **Split-solver balance error.** An integrated backstop. Weaker (diluted over
+   the trajectory, and blinded by clipping) but it samples the states the
+   trajectory actually visits, which a hand-chosen unit test may not. Keep it.
+
+3. **Comparing the two solvers' CO₂.** Confounded: the two run different
+   trajectories with different integrators, so a disagreement cannot be
+   attributed to the closure rather than to the integration. It is a useful
+   cross-check between two independent implementations, but it is not a closure
+   test, and item 1 subsumes what it would tell you.
+
+### Why the split solver is kept
+
+Not for accuracy, not for speed, and not because it reproduced the MATLAB
+precursor. It is kept because it computes CO₂ independently and the stiff solver
+structurally cannot, so it carries test 2 — and because two independent
+implementations over shared physics are the only convergence evidence this model
+has. Once test 1 exists, test 2 becomes a redundancy rather than the only line
+of defence.
+
+### Implementation note
+
+`R_diff = R_B - R_Bb` is computed three times per node — once in
+`compute_source_terms`, and again inside `Gamma_B` and `Gamma_E`. Same inputs, so
+no drift is possible today, but it is the same expression in three places
+(CLAUDE.md §8).
+
+---
+
 ## 18. Conservation Weights and Spherical Laplacian
 
 **Problem.** In spherical geometry, the natural cell volume for node $i$ is the shell $(4\pi/3)(r_{i+1/2}^3 - r_{i-1/2}^3)$. However, using geometrically exact shell volumes for discrete integration does not produce exact conservation with the Crank–Nicolson stencil, because the ratio $V_i / (r_i^2 h^2)$ varies across nodes.
@@ -1218,9 +1342,146 @@ where $\tau = 10^{-6}$ prevents division by near-zero values.
 
 Bounds: $\Delta t_{\min} = 10^{-4}$ d, $\Delta t_{\max} = 0.1$ d.
 
-**Note on conservation.** The adaptive stepper does **not** reject and re-do steps. When $\rho$ exceeds the threshold, the current step is accepted and the next step uses the reduced $\Delta t$. This is a "predict then correct" strategy: the occasional large-$\rho$ step introduces $O(\Delta t)$ trajectory error but does not break conservation (the per-step conservation identity holds for any $\Delta t$). In practice, the stepper maintains $\rho \approx 0.01\text{–}0.10$, corresponding to 1–10% relative change per step.
+**Note on conservation.** The adaptive stepper does **not** reject and re-do steps. When $\rho$ exceeds the threshold, the current step is accepted and the next step uses the reduced $\Delta t$. This is a "predict then correct" strategy: the occasional large-$\rho$ step introduces $O(\Delta t)$ trajectory error but does not break conservation (the per-step conservation identity holds for any $\Delta t$). 
+
+**Correction (2026-07-28).** This section previously claimed that "in practice, the stepper maintains $\rho \approx 0.01\text{–}0.10$, corresponding to 1–10% relative change per step." That was measured and is false for most of a run. For De Gryze soil 3, $\rho$ at $\Delta t = 10^{-4}$ d is 9e-4 at day 0.25 and 0.150 by day 21, rising to 0.206 by day 45. From roughly day 15 onward the criterion demands $\Delta t < \Delta t_{\min}$ — 6.7e-5 d at day 21, 4.9e-5 d at day 45 — so the solver takes steps it has itself judged too large. It cannot report this: `n_rejected` is guarded by `dt > dt_min`, which is false at the floor, and a 45-day run reports `n_rejected = 9` out of 391,773 steps. The limiter is DOC at the nodes adjacent to the POM surface, where $|S_C|/C$ reaches 2055 /day. See §20a.
 
 **Interaction with clipping.** Smaller $\Delta t$ means less overshoot, fewer clipping events, and better trajectory accuracy. This is why the adaptive stepper produced 50$\times$ better conservation (0.014%/year) than fixed $\Delta t = 0.001$ (0.7%/year) before the clipping bug was fixed — the adaptive stepper was taking smaller steps in regions of stiff dynamics, reducing the number of clipping corrections needed.
+
+---
+
+## 20a. Method of Lines and the Stiff Solver
+
+`run_aggregate_stiff` (`src/solver/mol.jl`, `src/solver/mol_solve.jl`) integrates
+the same model as `run_aggregate` with an implicit stiff solver instead of Strang
+splitting. Both paths call the same `compute_source_terms` and discretise space
+identically; there is one implementation of the biology.
+
+### Why a second solver exists
+
+The criterion in §20 is not an accuracy estimate. It bounds the relative change
+the **explicit** reaction step is allowed to make, which makes it a stability
+guard: the step is set by the fastest pool anywhere in the domain, regardless of
+whether that pool matters to the answer.
+
+Measured (De Gryze soil 3, $D$ = 1.25 mm, $n$ = 200):
+
+| $t$ [d] | limiter | $\lvert S\rvert/u$ [1/d] | node | $\Delta t$ permitted [d] |
+|---|---|---|---|---|
+| 0 | $F_m$ | 222 | 1 | 4.5e-4 |
+| 1 | $O$ | 15.3 | 1 | 6.5e-3 |
+| 5 | $C$ | 333 | 15 | 3.0e-4 |
+| 21 | $C$ | 1501 | 2 | 6.7e-5 |
+| 45 | $C$ | 2055 | 1 | 4.9e-5 |
+
+$S_C$ is roughly flat over the last stretch (−6.63 → −6.39 μg-C/mm³/d) while the
+pool it is divided by thins. The ratio is still climbing at day 45. **Cost per
+simulated day therefore grows without bound**, which no constant-factor
+optimisation addresses and which rules the scheme out for multi-year runs.
+
+An implicit method sizes its step from accuracy rather than stability, so the
+step grows once the fast pools reach quasi-steady state and cost tracks activity
+rather than elapsed time.
+
+### Formulation
+
+State vector, node-major with species fastest, so the Jacobian is
+block-tridiagonal with 8×8 blocks:
+
+$$
+u_{8(i-1)+k}, \quad k \in \{C, B, F_n, F_m, O, F_i, E, M\}, \quad i = 1 \ldots n
+$$
+
+with $P$ at index $8n+1$; $8n+1$ states in total. Species-major ordering would
+give five tridiagonal blocks glued by dense reaction coupling, which fills in
+badly under LU.
+
+The spatial operator reproduces `crank_nicolson.jl` term for term — same
+node-centred spherical stencil, same **arithmetic** face average of $D$, same
+ghost node at the flux boundary. A finite-volume flux form with harmonic face
+averages is arguably better and is deliberately **not** used, because then a
+disagreement between the two solvers could not be attributed to time
+integration. Change the space discretisation separately, and test it separately.
+
+POM coupling is exact rather than merely consistent: $J_P$ is computed once and
+enters $\mathrm{d}P/\mathrm{d}t = -4\pi r_0^2 J_P$ and the node-1 boundary term
+with opposite signs. With $W_i = 4\pi r_i^2 h$ the node-1 gain is
+$W_1 \cdot (1/r_1^2h^2) \cdot r_0^2 h J_P = 4\pi r_0^2 J_P$, identical.
+
+Oxygen at the outer node is pinned ($\mathrm{d}u/\mathrm{d}t = 0$, initial value
+$O_{amb}$). This is the same net condition as the split solver, which overwrites
+that node on every diffusion half-step — not an approximation of it. Its
+respiration still counts toward CO₂, matching `reaction_step.jl`.
+
+### Three differences that are not cosmetic
+
+1. **Coefficient lagging.** $\theta$ and the effective diffusivities are
+   evaluated at the current state here. `timestepper.jl` computes them once per
+   step from the state at the *start* of the step and holds them fixed across
+   both diffusion halves and the reaction, so the split solver lags its own
+   coefficients by one step. The two agree as $\Delta t \to 0$.
+2. **No negativity clipping.** §17 clips each pool at zero and credits the
+   clipped carbon to CO₂. That exists to catch Forward Euler overshoot. Any CO₂
+   the split solver reports that originated in clipping is a numerical artefact,
+   and the difference between the two runs measures it.
+3. **Cumulative respired carbon is not integrated.** It is recovered at output
+   times from the carbon balance — initial total carbon minus current total
+   carbon. It is a whole-domain quantity wanted a few dozen times per run, so
+   carrying it through the solver as a per-node quadrature builds machinery for
+   a resolution nothing uses. It also has a dense Jacobian row, and a dense row
+   forces the column colouring that sparse forward-mode AD uses to fall back to
+   one RHS evaluation per column — measured at 91 % of a 45-day run's cost when
+   it was carried as a state.
+
+   The consequence is that `mass_balance_error` is `NaN` on this path. The
+   recovery makes the balance identically zero, so reporting a number would
+   assert a check that was never performed. What remains available at output
+   resolution is monotonicity — respiration cannot be negative, so the recovered
+   quantity cannot fall — and that is reported as
+   `diagnostics["co2_monotonic"]`.
+
+Because of these, agreement between the solvers should be judged against the
+split solver run at a $\Delta t_{\min}$ small enough to be converged, not against
+its production settings.
+
+### Solver configuration
+
+Default is `FBDF` with a detected sparse Jacobian and a KLU factorisation. BDF is
+the documented choice for systems of this size, but is also documented to
+tolerate less stiffness than the ESDIRK family; `KenCarp47` is the fallback if
+Newton iterations fail.
+
+Sparsity is detected on a state with every pool forced strictly positive. The
+rate laws are guarded with $\max(0, u)$; on a state where a pool sits at zero the
+guard short-circuits, the tracer never records the coupling, and the pattern
+comes out missing entries — which degrades the Newton solve silently.
+
+`abstol` defaults to a **vector**, $\max(10^{-10}, 10^{-8}|u_{0,i}|)$ per state.
+The pools span roughly eight orders of magnitude, so a scalar tolerance either
+over-resolves MAOC or under-resolves DOC. Note the weakness: basing it on the
+INITIAL value penalises any pool that starts near zero and grows. `F_m` starts
+at $3.3\times10^{-8}$ (`F_m_min`/ω) and reaches $3.5\times10^{-4}$, so it is
+controlled four orders tighter than its own scale. Not yet resolved.
+
+### Known inefficiency
+
+`mol_rhs!` allocates seven length-$n$ vectors per evaluation ($\theta$,
+$\theta_a$, and five diffusivities) so that forward-mode AD sees them at the
+right element type. `PreallocationTools.DiffCache` is the standard remedy and is
+not yet applied. Recorded here rather than left silent.
+
+### Dependencies
+
+`OrdinaryDiffEqBDF`, `OrdinaryDiffEqSDIRK`, `LinearSolve`, `SciMLBase`,
+`SparseConnectivityTracer`, `ADTypes`, `SparseArrays`. These are hard
+dependencies of the package rather than of a script, because the integrator is
+core model machinery — placing it in `paper/` would require every driver to
+carry its own copy (CLAUDE.md §4). If per-session load time proves costly, the
+principled remedy is a package extension (weak dependency), not relocation.
+
+`SourceTerms` was made parametric in its element type at the same time. A
+hard-coded `Float64` there would silently force the stiff solver onto finite
+differences.
 
 ---
 
