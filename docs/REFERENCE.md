@@ -1,10 +1,23 @@
 # Soil Aggregate Model — Reference Manual
 
-**Last Updated**: 2026-02-09
-**Authoritative source for physics**: the manuscript on Overleaf
-(`Dropbox/Apps/Overleaf/Aggregation 2026 rev3/manuscript-4-5.tex`).
-The previously named `manuscript_updated.tex` does not exist.
-**Authoritative source for solver design**: `ARCHITECTURE_CLAUDE_CODE.md`
+**Last Updated**: 2026-07-29
+
+**Physics** — the manuscript on Overleaf, `Dropbox/Apps/Overleaf/Aggregation
+2026 rev3/`: `manuscript-4-5.tex` (main text, the current revision — 4-2, 4-3,
+4-4 and `manuscript.tex` are older) and `SI_tessellation.tex` (domain
+tessellation and the ω overlap correction). `manuscript_updated.tex` does not
+exist and never did.
+
+**Everything is working draft.** The manuscript, this file and the code are
+three descriptions of one model, none of them senior. Where they disagree,
+record it — §26 — rather than assuming the other one is right.
+
+**Solver design** — `docs/ARCHITECTURE.md`, formerly `ARCHITECTURE_CLAUDE_CODE.md`
+(renamed 2026-02, see `dev_notes/archive/REPO_REORGANIZATION.md`). **Stale:** it
+documents an `AggregateSolver` type that does not exist, omits the default
+solver entirely, and its `SoilProperties` listing still carries fields removed
+by erratum 11. `docs/AUDIT.md` tracks the decision on whether to rewrite or
+retire it. Do not treat it as current.
 **Units throughout**: μg/mm³ (= kg/m³), mm, days, kPa, K, J/mol
 
 ---
@@ -168,7 +181,7 @@ Fungal uptake: only (λ·F_i + F_n) contributes. All Γ_F enters F_m. Only F_i d
 | Symbol | Code | Value | Units | Notes |
 |--------|------|-------|-------|-------|
 | κ_s_ref | `κ_s_ref` | 0.1 | day⁻¹ | Sorption rate at T_ref |
-| κ_d_ref | `κ_d_ref` | 0.01 | day⁻¹ | Desorption rate at T_ref (κ_s > κ_d → hysteresis) |
+| κ_d_ref | `κ_d_ref` | 0.01 | day⁻¹ | Desorption rate at T_ref. κ_s/κ_d is the hysteresis strength |
 | ℰ_a,s | `Ea_MAOC_sorb` | 25,000 | J/mol | Activation energy, sorption |
 | ℰ_a,d | `Ea_MAOC_desorb` | 40,000 | J/mol | Activation energy, desorption (ℰ_a,d > ℰ_a,s → warming narrows hysteresis) |
 | ε_maoc | `ε_maoc` | 0.01 | μg/mm³ | Softplus smoothing width |
@@ -229,13 +242,21 @@ Modified by EPS and insulated fungi: α_eff = α₀ · exp(ω_E·E + ω_F·F_i),
 | Symbol | Code | Sandy loam | Units | Notes |
 |--------|------|------------|-------|-------|
 | k_d | `k_d_eq` | 0.05 | mm³/μg | Linear partition coefficient |
-| M_max | `M_max` | 10.0 | μg-C/mm³ | Max MAOC capacity |
 | k_L | `k_L` | 10.0 | mm³/μg | Langmuir affinity |
 | n_LF | `n_LF` | 0.7 | — | Freundlich exponent (< 1 → heterogeneous sites) |
-| k_ma | `k_ma` | 0.48 | μg-C/g-mineral | Mineral activity coefficient |
+| k_ma | `k_ma` | 0.048 | — | MAOC capacity per unit clay+silt, g-C/g-mineral |
 | f_cs | `f_clay_silt` | 0.40 | — | Clay + silt mass fraction |
 
-Clay-dependent capacity: M_max = k_ma · ρ_b · f_clay_silt.
+**There is no `M_max` field.** The capacity is computed in one place —
+`maoc_capacity(soil)` in `src/biology/maoc.jl`:
+
+    M_max = k_ma · f_clay_silt · ρ_b        [-]·[-]·[µg/mm³] = [µg-C/mm³]
+
+`k_ma` is **dimensionless** (g-C per g of clay+silt), which is what makes the
+identity close. `K_MA_HIGH_ACTIVITY = 0.086` and `K_MA_LOW_ACTIVITY = 0.048`
+(`src/constants.jl`) are Georgiou et al. (2022), 86 ± 9 and 48 ± 6 mg-C
+g⁻¹-mineral for high- and low-activity minerals, converted mg/g → g/g. The
+default is the low-activity value. See §26 erratum 12.
 
 ### 4.4 Aggregate Stability
 
@@ -247,15 +268,20 @@ plus two fields — `χ` and `a_p` — that no source file read. See §26 erratu
 | κ_b | `κ_b` | Pa·mm/(μg/mm³) | Specific binding strength per unit binder carbon. **Fitted** |
 | w_E | `w_E` | — | Binding weight of EPS relative to insulated hyphae, per unit carbon. **Fitted** |
 | d₃₂ | `d_32` | mm | Sauter mean particle diameter. **Measured** — from texture via `sauter_from_texture` |
+| p_Gc | `p_Gc` | — | Size dependence of the threshold, `G_c ∝ (r/δ_s)^p_Gc`. **Fitted**; default 0 = no size dependence |
 
 **The criterion.** Local cohesive strength against the wall shear stress of the
 oscillatory Stokes layer:
 
-    τ_c(r) = (κ_b / d₃₂) · [F_i(r) + w_E·E(r)]  ≥  τ_w
+    τ_c(r) = (κ_b / d₃₂) · [F_i(r) + w_E·E(r)]  ≥  τ_w(r)
 
-which reduces to a concentration threshold, independent of radial position:
+which reduces to a concentration threshold:
 
-    F_i(r) + w_E·E(r)  ≥  G_c = τ_w · d₃₂ / κ_b
+    F_i(r) + w_E·E(r)  ≥  G_c(r) = (τ_w · d₃₂ / κ_b) · (r/δ_s)^p_Gc
+
+With `p_Gc = 0` — the package default — the threshold does not depend on radial
+position and this is the pre-2026-07-29 form `G_c = τ_w·d₃₂/κ_b` exactly. See
+§4.4a.
 
 `τ_w = √2·μ·v_s/δ_s` with `δ_s = √(2ν_w/Ω)`; for the standard sieving protocol
 (`L_s = 13` mm, `f_s = 34` min⁻¹) this gives **δ_s = 0.7510 mm** and
@@ -298,15 +324,103 @@ measurably worse ordering across the five De Gryze soils.
 for clay is the most consequential input (`TEXTURE_CLASS_DIAMETERS`, clay =
 1 µm). **Ordering between soils is robust to that choice; the spread is not.**
 
+#### 4.4a The size dependence of the threshold
+
+*Added 2026-07-29. Implemented in `critical_binding`; `p_Gc = 0` is the default,
+so every result predating this stands unchanged.*
+
+    G_c(r) = G_c(δ_s) · (r/δ_s)^p_Gc
+
+`p_Gc > 0` makes a larger aggregate need more binder per unit volume — it is
+weaker at fixed binder concentration.
+
+**The exponent is fitted.** Two mechanisms act in that direction and neither
+fixes a value:
+
+* *Flaw statistics.* A larger body samples more of the flaw-size distribution,
+  so its strength falls with size (Weibull). For soil aggregates specifically,
+  measured tensile strength falls with aggregate diameter — **Dexter and Watts**
+  report roughly `Y ∝ d^-0.5` to `d^-1`, i.e. `p_Gc` between 0.5 and 1.
+* *Boundary-layer protrusion.* `δ_s = 0.7510 mm` sits inside the size range the
+  sieve series resolves. An aggregate smaller than δ_s lies inside the Stokes
+  layer and sees a velocity difference growing with its own radius; a larger one
+  protrudes into the free stream. The flat-wall closure that gives `τ_w` does not
+  hold across that transition. This is the limitation already recorded under
+  `compute_r_agg`; `p_Gc` is an empirical stand-in for it, **not** a derivation
+  of the curvature correction.
+
+A third possibility — that the disruptive stress genuinely is size-independent,
+which is what a Stokes-drag balance on a sphere in uniform shear gives, since
+the force scales as `r²` and so does the failure area — is `p_Gc = 0`, inside
+the same family. The parameter spans a structural question the model does not
+settle; it is not a correction bolted onto a settled one.
+
+**`p_Gc < 0` is a form already rejected.** Before the 2026-07 rewrite the code
+tested `[F_i + w_E·E]·r ≥ G_c`, which is `p_Gc = -1`: larger aggregates
+inherently more stable. It was removed because its derivation distributed Stokes
+drag over the aggregate surface — the wrong failure model — and because it made
+the criterion easier to satisfy the further out it was tested, so the aggregate
+had no reason to stop growing (`dev_notes/claude_code_instructions_aggregate_stability.md`).
+`p_Gc > 0` is the opposite sign and is the one the aggregate-strength
+measurements support. Setting `p_Gc < 0` reinstates the rejected form; the
+parameter permits it because the family is continuous, not because it is open.
+
+**Why δ_s is the pivot.** `G_c(δ_s) = τ_w·d₃₂/κ_b` for every `p_Gc`, so changing
+the exponent rotates the threshold about a fixed point instead of also moving
+its level. δ_s is measured from the sieving protocol, so no new fitted length
+enters. `κ_b` sets the level and `p_Gc` the shape, and they are separable for
+that reason — but a run that changes both at once cannot attribute anything to
+either.
+
+**What motivated it.** Measured 2026-07-29 at `p_Gc = 0` on De Gryze soil 3:
+`r_agg` sits at `r_0` through day 2, jumps on day 3, then is flat for 42 days.
+The flat threshold cuts the binder profile out in the far field where the
+profile is flat, while the binder accumulates 6-fold near the POM — nothing
+grades growth. A threshold rising with `r` moves the crossing inward into the
+region still accumulating, which is the only mechanism in this model that can
+give a radius growing over 21 days. The MATLAB precursor had the same idea as a
+commented-out `strength ./ x`.
+
 #### What is fitted and what is not
 
 `κ_b` and `w_E` are **fitted**. The argument above fixes the *form* — strength
 proportional to binder concentration and inversely to particle size — and says
-nothing about the coefficients. `κ_b = 0.0143869` carries forward the threshold
-previously in use rather than silently changing it: it is `2.25 × d₃₂(soil 3)`,
-which reproduces the old `G_c = τ_w/2.25` exactly, independently of `τ_w`; `w_E = 0.5`
-was hard-coded in `aggregate_radius.jl` before this revision and is now a named
-parameter so it can be fitted rather than hidden. See §5a.
+nothing about the coefficients.
+
+`κ_b = 0.16` since 2026-07-29 (via 0.012, 0.008, 0.024, 0.072, 0.1, 0.15, 0.18). The previous `0.0143869` was **not measured and
+not fitted to data**: it was `2.25 × d₃₂(soil 3)`, chosen to reproduce the legacy
+`G_c = τ_w/2.25` exactly, and that `k_F = 2.25` had a dimensionally inconsistent
+derivation (§26 erratum 11). It preserved a number rather than a result, and
+matching it constrained nothing. 0.16 is a fitted value like any other and
+carries no more authority than the evidence behind it.
+
+`w_E = 0.5` was hard-coded in `aggregate_radius.jl` before the 2026-07 revision
+and is now a named parameter so it can be fitted rather than hidden. See §5a.
+
+#### Two scalings in the binder when domains overlap
+
+`F_i + w_E·E` sums contributions at two scales whenever `ω > 1`:
+
+| contribution | scaling | why |
+|---|---|---|
+| pre-existing background binding agents | reduced by `ω` | apportioned across the domains that share that soil (§5d) |
+| residue-derived binding agents | not scaled by `ω` | produced from an undiluted surface flux; near the residue, set by release against diffusion rather than by domain size |
+
+Both are correct. Aggregation may be present at `t = 0`, and newly produced EPS
+adds to what the soil already held, so the pre-existing fraction must be
+distributed across domains rather than counted once per domain.
+
+`G_c` is a single physical threshold, so the criterion is exact only where one
+contribution dominates. Once residue decomposition is underway that is the
+residue-derived one — `F_i` sits at `F_i_min` and the crossing is set by EPS from
+residue carbon. The residual discrepancy is carried by `κ_b`, which is fitted.
+
+**No single factor corrects this.** Multiplying the binder by `ω` would inflate
+the dominant term, which is not diluted by `ω`.
+
+`p_Gc` is **fitted** as well, and its default of 0 is a default, not a finding —
+it preserves the pre-2026-07-29 model, nothing more. §4.4a says what is known
+about its value.
 
 The package default `d_32 = 0.01` mm is a **nominal placeholder**. Every real
 problem must override it.
@@ -328,6 +442,14 @@ Parametric types: constants are as fast as literals.
 ---
 
 ## 5a. Parameter Provenance and Anchors
+
+
+> **Every value in this package without a citation is a working assumption,
+> including all "defaults".** They are initial guesses, not reasoned settings,
+> and carry no more authority than a value set in a problem folder. Do not
+> describe one as reasonable, sensible, physical or calibrated unless a source
+> is named here. The intention is that a good De Gryze fit eventually becomes
+> the package starting point.
 
 **Purpose.** Records, for every parameter that can move a model output, whether a
 literature or precursor value exists and whether the code currently uses it.
@@ -395,7 +517,7 @@ porting-verification choice, not a scientific one.
 
 At least three values have been in play historically: **2.0** (documented in
 §3.3 until 2026-07-27), **1.0** (the code), **3.0** (Falconer). Whoever chose
-1.0 did not record why, and `paper/de_gryze/julia_falconer_deviations.md` — the
+1.0 did not record why, and `docs/julia_falconer_deviations.md` — the
 document whose whole subject is where Julia departs from Falconer — does not
 mention `delta` at all.
 
@@ -408,32 +530,20 @@ separately.**
 This is recorded here and nowhere else. It was previously encoded as a failing
 assertion in `test/test_parameters.jl` — see §26.
 
-### Open decision: `M_max`
+### Resolved: `M_max` *(2026-07-29 — see §26 erratum 12)*
 
-**Status: undecided. The code currently uses two different values in the same
-run and this has not been resolved.**
+Was an open decision with two values in the same run — 288 from
+`k_ma·f_clay_silt·ρ_b` at initialisation against `soil.M_max = 10.0` in the
+solver. Both were wrong.
 
-| Where | Value | Line |
-|---|---|---|
-| Initial MAOC partition | `k_ma · f_clay_silt · ρ_b` = 0.48 × 0.40 × 1500 = **288.0** | `initial_conditions.jl:382` |
-| Isotherm the solver evolves against | `soil.M_max` = **10.0** | `reactions.jl:152`, default at `parameters.jl:275` |
+There is now **one** definition, `maoc_capacity(soil)`, and the `M_max` field is
+gone. `k_ma` is dimensionless and anchored to Georgiou et al. (2022). For the
+De Gryze soils at low-activity mineralogy, `M_max` = 30.9, 44.1, 36.8, 38.2 and
+48.5 µg-C/mm³ for soils 1–5.
 
-`maoc.jl:44` states `M_max = k_ma · f_clay_silt · ρ_b` as definitional, which
-would make 288 the intended value and 10.0 a stale independent keyword. But the
-units do not close as written: `k_ma` is documented as µg-C per **gram** of
-mineral while `ρ_b` is µg/mm³, so the product is not dimensionally clean in
-either reading.
-
-**Consequence while unresolved:** the initial pool is built against a capacity
-of 288 and then evolved against a capacity of 10, so `M(0) ≫ M_eq` and every run
-opens with a spurious desorption pulse. The guard at `initial_conditions.jl:418`
-compares against 288 and therefore never fires.
-
-Found by the 2026-07-28 test audit (`docs/TEST_AUDIT_2026-07-28.md` §4b). Three
-separate positivity assertions on `M_max`, `k_ma` and `f_clay_silt` each pass
-individually; nothing asserts the relation between them. **Do not resolve this by
-picking whichever value looks better** — it needs the intended definition and its
-units, from the manuscript or from the author.
+The residual open question is **mineralogy, not units**: whether a given soil is
+high- or low-activity. That is a per-soil property with two candidate values, not
+a free parameter.
 
 ### Group C — no anchor, and outcome-relevant
 
@@ -441,15 +551,17 @@ Fitting belongs here. Roughly fifteen parameters against two observables.
 
 | Parameter | Value | Controls | Precursor |
 |---|---|---|---|
-| **`κ_b`** | 0.0143869 | sets `G_c` — the aggregation threshold outright | none; fitted to reproduce the previous `G_c = 0.0194` at soil 3. Replaces `k_F = 2.25`, whose stated derivation `σ_h·d_p/(4ρ_h)` was dimensionally inconsistent (§26 erratum 11) |
-| **`w_E`** | 0.5 | relative value of EPS vs hyphal carbon | none; inherited as a hard-coded literal from the MATLAB precursor (`strength = Fi + 0.5*E`) |
+| **`κ_b`** | 0.16 | sets the LEVEL of `G_c` (inversely — `G_c = τ_w·d₃₂/κ_b`) | none. Was 0.0143869, reverse-engineered to reproduce the previous `G_c = 0.0194` at soil 3, itself from `k_F = 2.25` whose stated derivation `σ_h·d_p/(4ρ_h)` was dimensionally inconsistent (§26 erratum 11). Changed 2026-07-29 — matching the legacy number constrained nothing |
+| **`w_E`** | 0.5 (run: 0.05) | relative value of EPS vs hyphal carbon | none; inherited as a hard-coded literal from the MATLAB precursor (`strength = Fi + 0.5*E`) |
+| **`p_Gc`** | 0.0 (run: 1.0) | size dependence of `G_c`; sets whether `r_agg` can grow at all | MATLAB `strength ./ x`, commented out, no record of why. Dexter & Watts put tensile strength at `d^-0.5` to `d^-1`, i.e. 0.5-1 |
 | **`γ`** | 0.2 | EPS allocation → the dominant binding agent | MATLAB 0.05, uncited |
 | `D_Fn0` | 0.01 (run: 1e-5) | hyphal front speed | MATLAB 1e-11, uncited |
 | `D_Fm0` | 1.0 (run: 1e-3) | translocation | MATLAB 1e-5, uncited |
 | `μ_E_max`, `K_E` | 0.002, 0.001 | EPS turnover | MATLAB `mu_E` = 0.01, uncited |
-| `R_P_max` | 1.0 (run: 2.5) | substrate supply rate | MATLAB split soluble/enzymatic, "not proper partitioning" |
+| `R_P_max` | 1.0 (run: 1.5) | substrate supply rate | MATLAB split soluble/enzymatic, "not proper partitioning" |
 | `κ_s_ref`, `κ_d_ref` | 0.1, 0.01 | MAOC buffering | no MAOC pool in MATLAB |
-| `k_ma`, `k_L`, `n_LF`, `M_max` | — | MAOC isotherm | no MAOC pool in MATLAB |
+| `k_L`, `n_LF` | 10.0, 0.7 | MAOC isotherm shape | no MAOC pool in MATLAB |
+| `k_ma` | 0.048 | MAOC capacity via `maoc_capacity` | **Group A** — Georgiou et al. (2022), 48 ± 6 mg-C/g-mineral (low-activity); 86 ± 9 for high-activity |
 | `B_S`, `F_S` | 0.5, 0.2 | space-limited yield | Julia-era; MATLAB `logistic_B` commented out |
 | `ε_F` | 1e-4 | caps Π | Julia-era; MATLAB `PI = Fm/(Fi+Fn)`, unregularized |
 | `F_i_min`, `F_n_min`, `F_m_min` | 1e-6, 1e-4, 1e-6 | fungal floors — set the starting point | MATLAB IC: `Fi = 0`, `E = 0` |
@@ -500,6 +612,11 @@ belongs in an experiment script.
 | `f_pack` | `(1/φ_POM)^(1/3)` | packing-cell diameter / POM diameter [-] |
 | `f_domain` | `max(f_pack, f_domain_min)` | model domain radius / POM radius [-] |
 | `ω` | `(f_domain/f_pack)³` | overlap correction [-] |
+
+The fullest treatment is `SI_tessellation.tex` (Overleaf) — proofs, the error
+bound and an implementation table. **It is a working draft, not a specification**;
+where it and the code disagree, neither is presumed right. §26 erratum 13 lists
+the disagreements.
 
 `f_domain_min` (default 10) exists so the radial grid resolves the near-POM
 gradients. Where it binds, neighbouring domains overlap and each holds more than
@@ -716,6 +833,73 @@ that extracts columns from a sweep DataFrame, calls `population_statistics`,
 and names the class columns. It defines nothing. It sits outside `src/` only
 because the package does not depend on DataFrames or CSV.
 
+## 5d. Initial condition — the SOC partition
+
+**Undocumented until 2026-07-29** — it sets two of nine state variables and
+appeared in neither the manuscript nor this file. Now in both: `manuscript-4-5.tex`
+§`sec:initial_condition`.
+
+Background SOC is apportioned at `t = 0` by `create_initial_state`
+(`src/physics/initial_conditions.jl`):
+
+```
+SOC_vol       = SOC · ρ_b                                  measured × measured
+biotic pools  = f_bact, f_fungi, f_eps  × SOC_vol           three fractions
+SOC_residual  = SOC_vol − (biotic pools)
+```
+
+`SOC_residual` then splits between DOC and MAOC by `partition_CM`, which solves
+mass balance against the sorption isotherm simultaneously:
+
+```
+C + M = SOC_residual                    and        M = M_max · f_LF(β·C)
+β = k_L·k_d / (θ + ρ_b·k_d)                        M_max = maoc_capacity(soil)
+```
+
+One equation, one unknown after substitution; solved by fixed-point iteration in
+the DOC-limited regime and bisection in the mineral-limited one.
+
+**`J_M` at the partition point is not exactly zero.** The softplus regularisation
+has `φ_ε(0) = ε·ln2`, so a smoothed switch carries a permanent sorption bias
+
+    J_M(M_eq, M_eq) = (κ_s − κ_d)·ε_maoc·ln2
+
+= 6.24e-4 µg mm⁻³ day⁻¹ at the package rates. Over 21 days that moves `M` by
+0.05 %, against 184× that much if the state is placed at 60 % of `M_eq` — so the
+floor is the right target and the distinction matters only when reading a
+diagnostic. `test_api.jl` asserts its value rather than asserting zero.
+
+### Saturation is an output
+
+`M/M_max` is not specified. It is whatever sorption equilibrium with the
+available carbon produces, and it is bounded:
+
+> as `k_L → ∞`, `C → 0` and `M/M_max → SOC_residual/M_max`
+
+— a ceiling fixed by **measured SOC and measured texture alone**. So the model
+predicts each soil's saturation deficit and the prediction is testable against
+reported values (Georgiou et al. 2022). For the De Gryze soils at low-activity
+mineralogy the ceilings are 0.79, 0.53, 0.80, 0.87, 0.82 for soils 1–5 — a
+spread of 0.34 across five soils from one meadow, generated by texture.
+
+### Sorption equilibrium is not SOC steady state
+
+`M_eq(C)` is fast, local and physicochemical — `κ_s ≈ 0.1 day⁻¹` against a
+21-day incubation, so mineral surfaces equilibrate with the pore water almost
+immediately. Starting there is not a claim that inputs balance outputs. It is
+only a claim that the fast process has run.
+
+### What the partition cannot do
+
+It has two pools to hold background carbon and no third. Any SOC the isotherm
+will not take is declared dissolved, because nothing else can hold it. Soils
+whose native POM has *not* been removed therefore need either a particulate
+background pool or an explicitly unrepresented fraction — see §26 erratum 14.
+`k_L` is the parameter that decides how much the minerals take, and the only
+constraint on it is that pore-water DOC land in the observed 10–100 mg/L.
+
+---
+
 # Part II: Rates, Fluxes, and Source Terms
 
 ## 6. Concentration Partitioning
@@ -850,7 +1034,19 @@ where φ_ε(x) = ε · ln(1 + e^{x/ε}) ≈ max(0, x) smoothly.
 ## 12. POM Dissolution
 
 **Flux density** at POM surface (r = r₀):
-$$J_P = R_P^{\max}(T) \cdot \frac{P}{P_0} \cdot \frac{B_0}{K_{B,P}+B_0} \cdot \frac{F_{n,0}}{K_{F,P}+F_{n,0}} \cdot \frac{\theta_0}{\theta_P+\theta_0} \cdot \frac{O_{aq,0}}{L_P+O_{aq,0}}$$
+$$J_P = R_P^{\max}(T) \cdot \frac{P}{P_0} \cdot \tfrac{1}{2}\left(\frac{B_0}{K_{B,P}+B_0} + \frac{F_{n,0}}{K_{F,P}+F_{n,0}}\right) \cdot \frac{\theta_0}{\theta_P+\theta_0} \cdot \frac{O_{aq,0}}{L_P+O_{aq,0}}$$
+
+**Additive, not multiplicative.** The two microbial terms are averaged, not
+multiplied. Depolymerisation is extracellular and acts on the substrate, so
+enzymes from either community suffice: at saturating biomass of one community
+alone the rate is half maximal, and both at saturation recover the full rate. A
+product form would assert that POM cannot be depolymerised without both
+populations present, which is false — white-rot fungi mineralise lignin without
+bacteria, and cellulolytic bacteria act without fungi. The equal weighting is a
+stated default and is calibratable; the additive *form* is not. Matches
+`manuscript-4-5.tex` Eq.~(\ref{eq:R_P}) and
+`src/carbon/pom_dissolution.jl:36-38`.
+
 
 Subscript 0 = values at first grid node. J_P has units [μg-C/mm²/day].
 
@@ -1296,7 +1492,9 @@ $$
 
 This guarantees that diffusion conserves mass exactly (to machine precision) when integrated with weights $W_i$. The same weights must be used everywhere: in `compute_total_carbon`, in the CO₂ accumulation (`volume_i`), and in post-processing integrals.
 
-**Implementation note.** The weights are precomputed in `GridInfo` and stored as `grid.W`. A separate `compute_cell_volumes` function exists for geometrically exact shell volumes (used only for visualization and post-processing, never for conservation accounting).
+**Implementation note.** `conservation_weight(r, h)` in `src/types.jl` is the single definition of $W = 4\pi r^2 h$; `conservation_weights(r_grid, h)` is its vector form. `GridInfo` calls it once and stores the result as `grid.W`, which is what every caller with a grid in hand should use. `compute_total_carbon` takes either the weight vector, a `GridInfo`, or `(r_grid, h)` and runs one loop. A separate `compute_cell_volumes` function exists for geometrically exact shell volumes $(4\pi/3)(r_+^3 - r_-^3)$ (used only for visualization and post-processing, never for conservation accounting) — it is a different quantity and is not interchangeable with $W$.
+
+The system total appears at two levels because it has two inputs: `compute_total_carbon(state, W)` sums a raw `AggregateState` against the weights, and `total_system_carbon(pools, k)` in `src/postprocessing/integration.jl` sums the already-integrated `IntegratedPools`. Each is a single implementation, `carbon_balance_table` and `result_to_dataframe` both go through the second, and `test_postprocessing.jl` asserts the two agree.
 
 ---
 
@@ -1724,9 +1922,163 @@ by the Sauter mean diameter and the two coefficients declared as fitted.
 
 ---
 
+### Erratum 12 — `M_max` was two quantities, and both were wrong *(2026-07-29)*
+
+`SoilProperties` carried an `M_max` field defaulting to **10.0** µg-C/mm³, read
+by `reactions.jl`, `api.jl` and `derived.jl`. `initial_conditions.jl` ignored it
+and computed `k_ma · f_clay_silt · ρ_b` instead. For De Gryze soil 3 that was
+**368 against 10**.
+
+Consequence: the state was initialised against one ceiling and evolved against
+another an order of magnitude lower, so `M(0) ≫ M_eq` at every node and every
+run opened with a desorption flux that had no equilibrium to reach. The guard in
+`create_initial_state` compared `M_0` against the texture value, not the
+solver's, so it never fired. In `paper/de_gryze/degryze_config.jl` the symptom
+was being suppressed by lowering `κ_d_ref` tenfold — a parameter compensating
+for a duplication defect.
+
+The 368 was independently wrong. `k_ma = 0.48` with the unit "µg-C per gram of
+mineral" is Georgiou et al. (2022)'s 48 mg-C g⁻¹ with the mg → g conversion
+dropped. The formula needs a **mass fraction**; read literally the stated unit
+puts the product short by 10⁶, and read as the code used it, 10× high.
+
+Fixed by deleting the field, making `maoc_capacity(soil)` the only definition,
+and redefining `k_ma` as dimensionless with the two Georgiou values in
+`src/constants.jl`. `test_parameters.jl` now asserts the field's **absence** and
+bounds `k_ma`, so neither arm can return silently.
+
+This is Jeppson's drift arm in both directions at once: two implementations of
+one quantity, and a third statement in a docstring (`maoc.jl:44` presented the
+texture formula as definitional while the code it documented used the field).
+
+---
+
+### Erratum 13 — ω: four open questions between the drafts *(2026-07-29)*
+
+Not an erratum in the sense of the others — nothing here is settled and nothing
+is being corrected. It records where two working drafts and the code disagree
+about the overlap correction, so the disagreements are not rediscovered.
+
+`SI_tessellation.tex` (Overleaf) has the fullest treatment: it derives `f_p`,
+`f_m`, `ω = (f_m/f_p)³` and the `C_bg/ω` dilution, proves exactness for
+diffusion and linear reactions, identifies the Monod nonlinearity, bounds the
+error by `1/ω`, and gives an implementation table. **The code matches that
+table.** The two proofs stand on their own — they do not depend on which
+document is senior.
+
+An independent trace on 2026-07-29 reached the same Monod result by another
+route, which is corroboration, and then raised four things the SI does not
+settle.
+
+**1. Is oxygen diluted?** The SI's error analysis writes
+`(O/ω)/(L_B + O/ω)` — it dilutes O₂. The code does not
+(`create_initial_state`, Step 8: "O₂ is NOT diluted — it is a boundary
+condition"). So `S_O = -α_O·Resp/capacity` divides a respiration built from
+diluted carbon by an undiluted oxygen capacity. Measured on soil 3, the O₂ sink
+is ~45× weaker than the physical one and `monod_O` never leaves 0.87, so
+near-POM anoxia does not form. **A physics decision, not a bug report:** O₂ is a
+boundary condition supplied from the headspace, which is an argument for leaving
+it undiluted — but then the sink term and the source term are on different
+scales. Unresolved.
+
+**2. Does the validity argument survive the configuration?** SI S7 rests the
+case on background carbon being negligible: "the native POM was removed, so
+`C_bg ≈ 0`". `degryze_ic` initialises the full measured SOC — 2.14 % for soil 3,
+`SOC_vol = 29.3` µg/mm³, partitioned across DOC, biomass, EPS and MAOC. That is
+not trace seeding. The `1/ω` bound is unaffected; the argument that the bound
+does not matter is. Either the argument needs revising or the configuration
+does.
+
+**3. Terms not yet analysed.** The SI treats the Monod form only. Also nonlinear
+in a diluted state against an undiluted constant: the Langmuir–Freundlich
+isotherm (`1/k_L`, `M_max`), the sigmoid thresholds (`B_min`, `E_min`,
+`F_i_min` — widths of `X_min/50`, effectively switches), the space-limited
+yields (`B_S`, `F_S`), the POM-dissolution Monods (`K_B_P`, `K_F_P`), the
+translocation network factor (`K_Fm_net`) and `ε_F` inside `Π`. Drafting work,
+not a defect.
+
+The binder against `G_c` is a separate case and is **not** a missing `1/ω`: the
+binder is a sum of a diluted background contribution and an undiluted
+residue-derived one, so no single factor applies. Documented as a property of the
+closure in §4.4.
+
+**4. Main text and SI describe different constructions.** `manuscript-4-5.tex`
+§2 (l.165–181) uses a single domain factor `f_d`, sets `r_max,j = f_d·r_0,j`,
+and states the tessellation "satisfies the non-overlapping constraint exactly".
+That identity holds only for `f_d = f_p`. The SI's entire subject is
+`f_m > f_p`, where domains do overlap. This one has to be reconciled before
+submission whatever else is decided.
+
+Also: the SI's worked example tabulates `ρ_POM = 100` µg-C/mm³ (`f_p = 2.55`,
+`ω = 60.2`) with 200 in a footnote. The code uses 200 (`f_p = 3.21`,
+`ω = 30.1`).
+
+**The overlap itself is not in question.** It is required — the model will be
+run on annual root input and field scenarios where model volume necessarily
+exceeds physical volume — and explicit domain coupling would need packing detail
+the model does not carry. The open question is where the `1/ω` is applied. See
+`docs/AUDIT.md`.
+
+---
+
+### Erratum 14 — `s_M`: two isotherms for one quantity *(2026-07-29)*
+
+`partition_CM` placed the initial MAOC at `M = s_M · M_max · f_LF(β·C)` with
+`s_M = 0.6` for De Gryze. `reactions.jl` drives `M` toward
+`M_max · f_LF(β·C)` — **no `s_M`**. So the state opened at 60 % of what the
+solver calls equilibrium and sorbed from `t = 0` to close a gap nothing in the
+experiment had created. Two implementations of one quantity, at any `ω`.
+
+Two further defects in the same parameter:
+
+- **The name did not match the code.** `s_M` was documented as "fraction of
+  mineral capacity occupied", i.e. `M/M_max` — the convention Georgiou et al.
+  (2022) report saturation deficits in. The code made it `M/M_eq_full`, the
+  fraction of *local equilibrium*. Since `f_LF < 1` always, the achieved
+  capacity-saturation was always below the number requested: `s_M = 0.6` on soil
+  3 delivered **0.485**.
+- **The diagnostic hid it.** The `@info` line reported `M/M_eq_full`, so it
+  printed 60.0 % and looked correct.
+
+`s_M` also had no entry in §5a, §2–§4, the manuscript or the SI. It was a free
+parameter that partitioned background carbon and was written down nowhere.
+
+**Fixed** by deleting it — from `partition_CM`, from `InitialConditions`, and
+from every call site. The partition now starts on the isotherm, so `J_M(0) = 0`,
+and saturation is an output with a measured ceiling (§5d). One fewer degree of
+freedom.
+
+**Consequence, and it needed a second change.** Removing `s_M` moved soil 3 from
+`C = 11.14, M = 17.86` to `C = 4.09, M = 24.91` — better, but pore-water DOC was
+still 573 mg/L against an observed 10–100. Cause: the partition has two pools and
+no third, so carbon the isotherm will not take is declared dissolved by default.
+De Gryze destroyed native POM, so background SOC there *is* mineral-associated —
+the isotherm was simply refusing it, at `k_L = 1000`. `k_L` raised to 25000,
+which puts DOC at 48 mg/L with the minerals holding 28.7 of 29.0. **`k_L` is
+Group C with no anchor; that DOC range is the first constraint ever placed on
+it**, and it is a physical one rather than a fit to a compared observable.
+
+`k_d_eq` was also implicated and is *not* changed: it moves solution DOC strongly
+(50× range → 1398 down to 29 mg/L) and MAOC not at all, because
+`C_eq = k_d·C/(θ+ρ_b·k_d) → C/ρ_b` saturates. So it cannot substitute for `k_L`,
+and its 0.05 → 0.005 cut on 2026-07-29 stands on the transport argument alone.
+
+**Renamed** `partition_CM`'s first argument `R` → `SOC_residual`. The manuscript
+uses `\mathcal{R}` for total respiration and `R_*` is a rate throughout `src/`;
+a carbon stock called `R` collided with both.
+
+**Documented**, for the first time, in three places at once: §5d here,
+`manuscript-4-5.tex` §`sec:initial_condition` (which also states the structural
+limitation for intact soils), and `test_api.jl`, which asserts mass balance,
+`J_M(0) = 0` against the solver's own isotherm, monotonicity of saturation in
+`k_L`, convergence to the `SOC_residual/M_max` ceiling, the DOC band that set
+`k_L`, and the absence of the `s_M` field.
+
+---
+
 Historical documents that *quote* the old form were left alone on purpose:
 `docs/STRUCTURAL_AUDIT_2026-07-27.md`, `dev_notes/falconer_questions.md`
-(the brief describes what we had when we asked), `paper/de_gryze/julia_falconer_deviations.md`
+(the brief describes what we had when we asked), `docs/julia_falconer_deviations.md`
 and everything under `dev_notes/archive/`.
 
 ---

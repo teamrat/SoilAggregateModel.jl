@@ -75,7 +75,6 @@ filter(row -> row.time_days == 21, df)    # extract day 21 for data comparison
 function result_to_dataframe(result::SimulationResult)
     # --- Core integration (does both total and aggregate domain) ---
     pools = integrated_pools(result)
-    n = length(pools.t)
 
     # --- CO₂ flux (backward finite difference) ---
     flux = co2_flux(result)
@@ -85,21 +84,13 @@ function result_to_dataframe(result::SimulationResult)
     F_agg_vec    = pools.F_i_agg   .+ pools.F_n_agg   .+ pools.F_m_agg
 
     # --- Total system carbon and conservation error ---
-    C_total_all = Vector{Float64}(undef, n)
-    for i in 1:n
-        C_total_all[i] = pools.P[i] + pools.CO2[i] +
-                         pools.C_total[i] + pools.B_total[i] +
-                         pools.F_i_total[i] + pools.F_n_total[i] + pools.F_m_total[i] +
-                         pools.E_total[i] + pools.M_total[i]
-    end
-    C_initial = C_total_all[1]
-    C_balance_error = (C_total_all .- C_initial) ./ C_initial
+    bal = carbon_balance_table(pools)
+    C_total_all     = bal.C_total
+    C_balance_error = bal.relative_error
 
     # --- Normalization (per mille of initial total C) ---
     # Denominator: all carbon at t=0 (excluding CO₂ which starts at 0)
-    C_init_no_co2 = pools.P[1] + pools.C_total[1] + pools.B_total[1] +
-                    pools.F_i_total[1] + pools.F_n_total[1] + pools.F_m_total[1] +
-                    pools.E_total[1] + pools.M_total[1]
+    C_init_no_co2 = total_system_carbon(pools, 1; include_co2 = false)
 
     permille = x -> x ./ C_init_no_co2 .* 1000.0
 
@@ -279,6 +270,7 @@ function run_diameter_sweep(diam_all, bio, soil, T_func, ψ_func, O2_func;
                             ω::Real=1.0,
                             snap_times::Vector{Float64}=Float64[],
                             solver::Symbol=:stiff,
+                            quiet::Bool=false,
                             output_dir::String="")
 
     solver in (:stiff, :split) || throw(ArgumentError(
@@ -288,11 +280,11 @@ function run_diameter_sweep(diam_all, bio, soil, T_func, ψ_func, O2_func;
     all_snapshots  = DataFrame[]
     save_snaps = !isempty(snap_times)
 
-    println("Running $(length(diam_all)) simulations...")
-    if save_snaps
-        println("  Spatial snapshots at t = $(snap_times)")
+    if !quiet
+        println("Running $(length(diam_all)) simulations...")
+        save_snaps && println("  Spatial snapshots at t = $(snap_times)")
+        println("-"^72)
     end
-    println("-"^72)
 
     total_start = time()
 
@@ -360,7 +352,7 @@ function run_diameter_sweep(diam_all, bio, soil, T_func, ψ_func, O2_func;
 
         # Progress
         Printf_diam = lpad(string(round(diam, digits=3)), 6)
-        println("  [$(lpad(idx, 2))/$(length(diam_all))]  D=$(Printf_diam) mm  " *
+        quiet || println("  [$(lpad(idx, 2))/$(length(diam_all))]  D=$(Printf_diam) mm  " *
                 "P₀=$(round(P_0, digits=3)) µg-C  " *
                 "steps=$(n_steps)  " *
                 "Δt=$(round(elapsed, digits=1))s  " *
@@ -368,9 +360,11 @@ function run_diameter_sweep(diam_all, bio, soil, T_func, ψ_func, O2_func;
     end
 
     total_elapsed = time() - total_start
-    println("-"^72)
-    println("Total wall time: $(round(total_elapsed, digits=1)) s")
-    println()
+    if !quiet
+        println("-"^72)
+        println("Total wall time: $(round(total_elapsed, digits=1)) s")
+        println()
+    end
 
     # Return snapshots as second value if requested
     if save_snaps

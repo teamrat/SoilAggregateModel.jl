@@ -178,9 +178,40 @@ function integrated_pools(result::SimulationResult)
 end
 
 """
+    total_system_carbon(pools::IntegratedPools, k::Integer; include_co2::Bool = true)
+
+Total carbon in the system at output index `k` [μg-C]:
+
+    P + CO₂ + C + B + F_i + F_n + F_m + E + M
+
+all terms already volume-integrated. This is the only place that list is
+written; anything needing the system total goes through here.
+
+`include_co2 = false` drops the respired term, which is what a normalisation
+denominator meaning "all carbon at t = 0" needs. It is not the same as taking
+`k = 1` of the full sum: CO₂ is zero at the first record only when that record
+is at t = 0, which the output schedule does not guarantee.
+
+`compute_total_carbon` computes the same quantity from a raw `AggregateState`
+and the grid weights. The two are separate entry points because they take
+different inputs, and they must agree.
+"""
+function total_system_carbon(pools::IntegratedPools, k::Integer; include_co2::Bool = true)
+    s = pools.P[k]
+    include_co2 && (s += pools.CO2[k])
+    return s + pools.C_total[k] + pools.B_total[k] +
+           pools.F_i_total[k] + pools.F_n_total[k] + pools.F_m_total[k] +
+           pools.E_total[k] + pools.M_total[k]
+end
+
+"""
     carbon_balance_table(result::SimulationResult)
+    carbon_balance_table(pools::IntegratedPools)
 
 Carbon conservation check at each output time.
+
+Pass the `IntegratedPools` when they have already been computed — the
+`SimulationResult` method exists only to compute them first.
 
 Computes total carbon = P + Σ(pools×W) + CO₂ and checks against initial value.
 
@@ -203,18 +234,12 @@ bal = carbon_balance_table(result)
 @assert all(abs.(bal.relative_error) .< 1e-12)
 ```
 """
-function carbon_balance_table(result::SimulationResult)
-    pools = integrated_pools(result)
+carbon_balance_table(result::SimulationResult) =
+    carbon_balance_table(integrated_pools(result))
+
+function carbon_balance_table(pools::IntegratedPools)
     n = length(pools.t)
-    C_tot = Vector{Float64}(undef, n)
-
-    for i in 1:n
-        C_tot[i] = pools.P[i] + pools.CO2[i] +
-                   pools.C_total[i] + pools.B_total[i] +
-                   pools.F_i_total[i] + pools.F_n_total[i] + pools.F_m_total[i] +
-                   pools.E_total[i] + pools.M_total[i]
-    end
-
+    C_tot = [total_system_carbon(pools, i) for i in 1:n]
     C_initial = C_tot[1]
     relative_error = [(C_tot[i] - C_initial) / C_initial for i in 1:n]
 

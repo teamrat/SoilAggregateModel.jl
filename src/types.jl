@@ -3,7 +3,7 @@
 
 Core type definitions for the soil aggregate biogeochemical model.
 
-All types follow the architecture specification (ARCHITECTURE_CLAUDE_CODE.md).
+All types follow the architecture specification (docs/ARCHITECTURE.md — stale in parts, see docs/AUDIT.md).
 Units: μg/mm³ (= kg/m³), mm, days, kPa, K, J/mol throughout.
 
 # Fill convention
@@ -34,7 +34,6 @@ Fields:
 - `D_O2_w`: O₂ diffusion in water [mm²/day]
 - `D_DOC_w`: DOC diffusion in water [mm²/day]
 - `D_O2_a`: O₂ diffusion in air [mm²/day]
-- `D_Fm`: Mobile fungi translocation rate [mm²/day] (spatially uniform, no tortuosity)
 - `K_H_O`: Henry's law constant for O₂ (dimensionless)
 """
 mutable struct TemperatureCache
@@ -50,7 +49,6 @@ mutable struct TemperatureCache
     D_O2_w::Float64
     D_DOC_w::Float64
     D_O2_a::Float64
-    D_Fm::Float64        # = D_Fm0_ref × f_fun (spatially uniform)
 
     # Henry's law
     K_H_O::Float64
@@ -63,7 +61,7 @@ Create an uninitialized TemperatureCache. All fields set to NaN.
 Use `update_temperature_cache!` to populate with temperature-dependent values.
 """
 function TemperatureCache()
-    TemperatureCache(NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN)
+    TemperatureCache(NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN, NaN)
 end
 
 #═══════════════════════════════════════════════════════════════════════════════
@@ -158,7 +156,7 @@ Fields:
 - Temperature cache:
   - `f_T`: TemperatureCache struct
 
-Note: D_Fm (mobile fungi) is spatially uniform (constant) but stored as vector for solver compatibility.
+Note: D_Fm (mobile fungi) is network-dependent, so it genuinely varies by node — see D_eff_fungi_mobile.
 """
 struct Workspace
     # Tridiagonal system (reused for each of 5 diffusing species)
@@ -173,7 +171,7 @@ struct Workspace
     D_C::Vector{Float64}     # n — effective C diffusion
     D_B::Vector{Float64}     # n — effective B diffusion
     D_Fn::Vector{Float64}    # n — effective F_n diffusion
-    D_Fm::Vector{Float64}    # n — effective F_m diffusion (spatially uniform)
+    D_Fm::Vector{Float64}    # n — effective F_m diffusion (network-dependent)
     D_O::Vector{Float64}     # n — effective O diffusion
 
     # Temperature cache
@@ -251,6 +249,28 @@ end
 #═══════════════════════════════════════════════════════════════════════════════
 
 """
+    conservation_weight(r, h)
+    conservation_weights(r_grid, h)
+
+Volumetric weight of one radial node, `W = 4π r² h` [mm³].
+
+This is the only definition of the weight. It is stencil-matched to the
+spherical Laplacian discretisation: `W_i / (r_i² h²) = 4π/h` is independent of
+`i`, and that cancellation is what makes the diffusive fluxes telescope exactly
+so integrated pools conserve carbon. Other quadratures do not have the property
+— in particular the finite-volume shell volume `(4π/3)(r₊³ − r₋³)` in
+`finite_volumes.jl` is a different quantity for a different scheme and is not
+interchangeable with this one.
+
+`GridInfo` stores the vector form as `W`; use `grid.W` wherever a grid is at
+hand and call `conservation_weights` only where one is not.
+"""
+conservation_weight(r::Real, h::Real) = 4.0 * π * r^2 * h
+
+conservation_weights(r_grid::AbstractVector{<:Real}, h::Real) =
+    [conservation_weight(r, h) for r in r_grid]
+
+"""
     GridInfo
 
 Immutable record of the radial grid and precomputed conservation weights.
@@ -291,7 +311,7 @@ Construct a GridInfo with uniform spacing and precomputed conservation weights.
 function GridInfo(n::Int, r_0::Real, r_max::Real)
     h = (r_max - r_0) / (n - 1)
     r_grid = [r_0 + i * h for i in 0:n-1]
-    W = [4.0 * π * r_grid[i]^2 * h for i in 1:n]
+    W = conservation_weights(r_grid, h)
     GridInfo(r_grid, h, Float64(r_0), Float64(r_max), n, W)
 end
 

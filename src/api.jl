@@ -64,7 +64,7 @@ Run a soil aggregate biogeochemical simulation with the Strang-split solver.
 # SOC-based initialization (recommended)
 bio  = BiologicalProperties()
 soil = SoilProperties(f_clay_silt = 0.42)
-ic   = InitialConditions(SOC = 18.3, s_M = 0.4)
+ic   = InitialConditions(SOC = 18.3)
 
 result = run_aggregate(bio, soil, T, ψ, O2, (0.0, 60.0);
                        n_grid=200, ic=ic, r_0=0.5, r_max=12.5)
@@ -115,7 +115,7 @@ function run_aggregate(bio::BiologicalProperties, soil::SoilProperties,
     end
 
     # === Compute initial total carbon (true reference for balance) ===
-    C_total_initial = compute_total_carbon(state, grid.r_grid, grid.h)
+    C_total_initial = compute_total_carbon(state, grid)
 
     # === Run simulation ===
     result = run_simulation(
@@ -131,7 +131,7 @@ function run_aggregate(bio::BiologicalProperties, soil::SoilProperties,
     # === Package outputs ===
     outputs = OutputRecord[]
     for i in 1:length(result.times)
-        error = compute_carbon_balance_error(result.states[i], grid.r_grid, grid.h, C_total_initial)
+        error = compute_carbon_balance_error(result.states[i], grid, C_total_initial)
         push!(outputs, OutputRecord(result.times[i], result.states[i], error))
     end
 
@@ -178,15 +178,16 @@ function create_initial_state_legacy(n::Int, bio::BiologicalProperties,
     state.E .= 0.0
 
     # Water content at ψ_0
-    m_vg = 1.0 - 1.0 / soil.n_vg
-    θ_0 = soil.θ_r + (soil.θ_s - soil.θ_r) *
-          (1.0 + (-soil.α_vg * ψ_0)^soil.n_vg)^(-m_vg)
+    # van_genuchten, not an inline copy: the inline form raised a negative base
+    # to the power n_vg at saturation (ψ_0 = 0, which van_genuchten_inverse
+    # returns exactly) and threw DomainError. CLAUDE.md §8.
+    θ_0 = van_genuchten(ψ_0, soil.α_vg, soil.n_vg, soil.θ_r, soil.θ_s)
     θ_a_0 = soil.θ_s - θ_0
 
     # MAOC at equilibrium with initial DOC
-    C_aq_0 = C_0 / (θ_0 + soil.ρ_b * soil.k_d_eq)
+    C_aq_0 = C_aqueous(C_0, θ_0, soil)
     C_eq_0 = soil.k_d_eq * C_aq_0
-    state.M .= M_eq_langmuir_freundlich(C_eq_0, soil.M_max, soil.k_L, soil.n_LF)
+    state.M .= M_eq_langmuir_freundlich(C_eq_0, maoc_capacity(soil), soil.k_L, soil.n_LF)
 
     # Oxygen: total soil (dissolved + gas)
     K_H = K_H_O2(T_0)
@@ -201,39 +202,48 @@ function create_initial_state_legacy(n::Int, bio::BiologicalProperties,
 end
 
 """
-    compute_total_carbon(state::AggregateState, r_grid::Vector{Float64}, h::Real)
+    compute_total_carbon(state::AggregateState, W::AbstractVector{<:Real})
+    compute_total_carbon(state::AggregateState, grid::GridInfo)
+    compute_total_carbon(state::AggregateState, r_grid::AbstractVector{<:Real}, h::Real)
 
-Compute total carbon in the system.
+Total carbon in the system [µg-C]:
 
-# Returns
-- Total carbon [µg-C]
+    C_total = P + ∑_i (C+B+F_n+F_m+F_i+E+M)_i · W_i + CO₂
 
-# Notes
-- Uses conservation weights W_i = 4πr_i²h
-- C_total = P + ∑(C+B+F_n+F_m+F_i+E+M)×W_i + CO2
+`W` are the conservation weights (`conservation_weight`). Pass a `GridInfo` when
+one is available: `grid.W` is already built, so nothing is allocated.
+
+This is the state-level total. `total_system_carbon` computes the same quantity
+from an already-integrated `IntegratedPools`. The two are separate entry points
+into the same sum because they take different inputs, and they must agree.
 """
-function compute_total_carbon(state::AggregateState, r_grid::Vector{Float64}, h::Real)
+function compute_total_carbon(state::AggregateState, W::AbstractVector{<:Real})
+    length(W) == length(state.C) ||
+        throw(DimensionMismatch("conservation weights have length $(length(W)), state has $(length(state.C)) nodes"))
     integral = 0.0
-    for i in 1:length(state.C)
+    @inbounds for i in eachindex(state.C)
         C_pools = state.C[i] + state.B[i] + state.F_n[i] + state.F_m[i] +
                  state.F_i[i] + state.E[i] + state.M[i]
-        W_i = 4.0 * π * r_grid[i]^2 * h
-        integral += C_pools * W_i
+        integral += C_pools * W[i]
     end
     return state.P + integral + state.CO2_cumulative
 end
 
-"""
-    compute_carbon_balance_error(state::AggregateState, r_grid::Vector{Float64},
-                                 h::Real, C_initial::Real)
+compute_total_carbon(state::AggregateState, grid::GridInfo) =
+    compute_total_carbon(state, grid.W)
 
-Compute carbon mass balance error for diagnostic purposes.
+compute_total_carbon(state::AggregateState, r_grid::AbstractVector{<:Real}, h::Real) =
+    compute_total_carbon(state, conservation_weights(r_grid, h))
 
-# Returns
-- Relative error: (C_total - C_initial) / C_initial
 """
-function compute_carbon_balance_error(state::AggregateState, r_grid::Vector{Float64},
-                                     h::Real, C_initial::Real)
-    C_total = compute_total_carbon(state, r_grid, h)
-    return (C_total - C_initial) / C_initial
-end
+    compute_carbon_balance_error(state, grid::GridInfo, C_initial)
+    compute_carbon_balance_error(state, r_grid, h, C_initial)
+
+Carbon mass balance error, relative: `(C_total - C_initial) / C_initial`.
+"""
+compute_carbon_balance_error(state::AggregateState, grid::GridInfo, C_initial::Real) =
+    (compute_total_carbon(state, grid) - C_initial) / C_initial
+
+compute_carbon_balance_error(state::AggregateState, r_grid::AbstractVector{<:Real},
+                             h::Real, C_initial::Real) =
+    (compute_total_carbon(state, r_grid, h) - C_initial) / C_initial

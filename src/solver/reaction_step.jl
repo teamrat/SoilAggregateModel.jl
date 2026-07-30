@@ -92,7 +92,7 @@ function reaction_step!(state::AggregateState, workspace::Workspace, dt::Real,
 
         # Conservation weight for this node (matches spherical Laplacian stencil)
         # W_i = 4πr_i²h ensures W_i/(r_i²h²) = 4π/h is constant → exact telescoping
-        volume_i = 4.0 * π * r_grid[i]^2 * h
+        volume_i = conservation_weight(r_grid[i], h)
 
         # Enforce non-negativity — track clipped carbon for exact conservation
         # Any carbon clipped to zero is redirected to CO₂ (lost biomass/substrate)

@@ -31,6 +31,17 @@ using Test
             @test result.grid.W[i] ≈ 4π * result.grid.r_grid[i]^2 * result.grid.h
         end
 
+        # grid.W is exactly what the primitive produces — no second formula
+        @test result.grid.W == conservation_weights(result.grid.r_grid, result.grid.h)
+        @test conservation_weight(0.7, 0.1) ≈ 4π * 0.49 * 0.1
+
+        # The property the formula is chosen for: W_i/(r_i²h²) = 4π/h, constant
+        # in i. That is what makes the diffusive fluxes telescope, so it is the
+        # tripwire on any change to the weight.
+        ratio = [result.grid.W[i] / (result.grid.r_grid[i]^2 * result.grid.h^2)
+                 for i in 1:result.grid.n]
+        @test all(isapprox.(ratio, 4π / result.grid.h, rtol=1e-14))
+
         # Grid spacing is uniform
         @test result.grid.h ≈ (result.grid.r_max - result.grid.r_0) / (result.grid.n - 1)
 

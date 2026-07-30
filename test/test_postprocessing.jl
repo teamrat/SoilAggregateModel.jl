@@ -2,7 +2,7 @@
 # Tests for post-processing functions
 
 using Test
-import SoilAggregateModel: compute_source_terms, _prepare_environment
+import SoilAggregateModel: compute_source_terms, _prepare_environment, compute_total_carbon
 
 @testset "Post-processing" begin
     bio = BiologicalProperties()
@@ -45,6 +45,31 @@ import SoilAggregateModel: compute_source_terms, _prepare_environment
         @test haskey(bal, :C_initial)
         @test haskey(bal, :relative_error)
         @test all(abs.(bal.relative_error) .< 1e-12)
+
+        # total_system_carbon (pools-level) and compute_total_carbon
+        # (state-level) are separate entry points into the same sum because they
+        # take different inputs. Nothing structural keeps them from drifting, so
+        # they are pinned to each other here.
+        pools = integrated_pools(result)
+        for k in (1, 16, 31)
+            from_pools = total_system_carbon(pools, k)
+            from_state = compute_total_carbon(result.outputs[k].state, result.grid)
+            @test from_pools ≈ from_state rtol=1e-12
+        end
+
+        # include_co2 = false drops exactly the respired term and nothing else
+        no_co2 = total_system_carbon(pools, 20; include_co2 = false)
+        @test no_co2 ≈ total_system_carbon(pools, 20) - pools.CO2[20] rtol=1e-12
+
+        # the two carbon_balance_table methods are one implementation
+        @test carbon_balance_table(pools).C_total == bal.C_total
+
+        # compute_total_carbon entry points agree bitwise
+        st = result.outputs[10].state
+        via_grid = compute_total_carbon(st, result.grid)
+        @test via_grid == compute_total_carbon(st, result.grid.W)
+        @test via_grid == compute_total_carbon(st, result.grid.r_grid, result.grid.h)
+        @test_throws DimensionMismatch compute_total_carbon(st, result.grid.W[1:end-1])
     end
 
     @testset "co2_flux" begin
@@ -64,6 +89,119 @@ import SoilAggregateModel: compute_source_terms, _prepare_environment
             r_agg = compute_r_agg(result.outputs[i], result.grid, result.params)
             @test r_agg >= 0.0
             @test r_agg <= result.grid.r_max
+        end
+    end
+
+    @testset "critical_binding — size dependence" begin
+        δ_s   = wet_sieving_stress().δ_s
+        G_ref = critical_binding(soil)
+
+        # The default must be the flat threshold, or every result predating
+        # 2026-07-29 silently changes meaning.
+        @test soil.p_Gc == 0.0
+
+        @testset "p_Gc = 0 reduces exactly" begin
+            # Not approximately. The short-circuit multiplies by 1.0, so these
+            # are the same Float64 — if that ever becomes an ≈, the flat case is
+            # going through the power and the reduction is no longer exact.
+            for r in (0.01, 0.5, δ_s, 3.7, 100.0)
+                @test critical_binding(soil, r) === G_ref
+            end
+            rv = [0.01, 0.5, δ_s, 3.7]
+            @test critical_binding(soil, rv) == fill(G_ref, 4)
+            @test length(critical_binding(soil, rv)) == length(rv)
+        end
+
+        @testset "pivot is δ_s for every exponent" begin
+            # G_c(δ_s) = G_ref identically in p_Gc. This is what makes δ_s a
+            # pivot rather than one more fitted length: changing p_Gc rotates
+            # the threshold about a fixed point instead of also moving its level.
+            for p in (0.0, 0.5, 1.0, 2.0, -0.5)
+                s = SoilProperties(p_Gc = p)
+                @test critical_binding(s, δ_s) ≈ G_ref rtol=1e-14
+            end
+        end
+
+        @testset "p_Gc = 1 is linear in r" begin
+            s = SoilProperties(p_Gc = 1.0)
+            @test critical_binding(s, 2δ_s) ≈ 2G_ref rtol=1e-14
+            @test critical_binding(s, δ_s/4) ≈ G_ref/4 rtol=1e-14
+            # Strictly increasing, so a bigger aggregate always needs more binder
+            r = collect(0.1:0.1:5.0)
+            g = critical_binding(s, r)
+            @test all(diff(g) .> 0.0)
+        end
+
+        @testset "p_Gc = 2 is the square" begin
+            s = SoilProperties(p_Gc = 2.0)
+            @test critical_binding(s, 3δ_s) ≈ 9G_ref rtol=1e-14
+        end
+
+        # ── r_agg under a size-dependent threshold ───────────────────────────
+        #
+        # Tested against a CONSTRUCTED binder profile, not a simulated one. The
+        # default soil's threshold need not cross this particular run's profile
+        # at all, and a test that silently measures "no crossing anywhere" would
+        # pass while proving nothing.
+        #
+        # binding(r) = 1 - r/R, strictly decreasing and linear. For p_Gc = 0 and
+        # p_Gc = 1 the threshold is also linear in r, so `excess` is linear and
+        # the sub-cell interpolation is EXACT — the expected crossing is a closed
+        # form and the test is an equality, not a tolerance on a curve fit.
+        #
+        #   p_Gc = 0:  1 - r/R = G_ref              →  r = R(1 - G_ref)
+        #   p_Gc = 1:  1 - r/R = G_ref·r/δ_s        →  r = 1/(1/R + G_ref/δ_s)
+        #
+        # r_agg does not feed back into the state equations, so re-scoring one
+        # stored profile under several thresholds is exact, not indicative.
+        @testset "r_agg under G_c(r)" begin
+            n_t, R = 101, 20.0
+            grid_t  = GridInfo(n_t, 0.1, 10.1)          # h = 0.1
+            state_t = AggregateState(n_t)
+            state_t.F_i .= 1.0 .- grid_t.r_grid ./ R
+            state_t.E   .= 0.0                          # binder is F_i alone
+            rec_t = OutputRecord(0.0, state_t, 0.0)
+
+            # G_ref = 0.6125 puts the flat crossing at r = 7.75, BETWEEN nodes
+            # (7.7 and 7.8), so hitting it proves the interpolation rather than
+            # node snapping. w_E is irrelevant here because E = 0.
+            G_want  = 0.6125
+            soil_p(p) = SoilProperties(
+                κ_b = wet_sieving_stress().τ_w * SoilProperties().d_32 / G_want,
+                p_Gc = p)
+            r_agg_p(p) = compute_r_agg(rec_t, grid_t, ParameterSet(bio, soil_p(p)))
+
+            @test critical_binding(soil_p(0.0)) ≈ G_want rtol=1e-12
+
+            @testset "flat threshold, closed form" begin
+                @test r_agg_p(0.0) ≈ R * (1 - G_want) rtol=1e-12   # 7.75
+                @test r_agg_p(0.0) != grid_t.r_grid[78]            # not snapped
+                @test grid_t.r_grid[1] < r_agg_p(0.0) < grid_t.r_max
+            end
+
+            @testset "linear threshold, closed form" begin
+                expected = 1.0 / (1.0/R + G_want/δ_s)
+                @test r_agg_p(1.0) ≈ expected rtol=1e-12           # ≈ 1.155
+                @test grid_t.r_grid[1] < r_agg_p(1.0) < grid_t.r_max
+                # The crossing moved inward by more than a factor of six. That
+                # is the whole mechanism: a threshold rising with r cuts the
+                # binder profile where the profile is still steep.
+                @test r_agg_p(1.0) < r_agg_p(0.0)
+            end
+
+            @testset "monotone in p_Gc, and not quantised" begin
+                ps   = collect(range(0.0, 1.0, length = 25))
+                vals = r_agg_p.(ps)
+                @test all(diff(vals) .<= 1e-12)      # non-increasing throughout
+                # r_agg is interpolated, so a smooth sweep gives a spread of
+                # distinct values. Snapped to nodes it would give a handful —
+                # BACKLOG item 6 is why that distinction matters.
+                @test length(unique(vals)) > 15
+            end
+
+            @testset "negative exponent pushes outward" begin
+                @test r_agg_p(-0.5) > r_agg_p(0.0)
+            end
         end
     end
 
@@ -133,7 +271,7 @@ import SoilAggregateModel: compute_source_terms, _prepare_environment
         @test all(M_eq .>= 0.0)
 
         # M_eq should be bounded by M_max
-        M_max = result.params.soil.M_max
+        M_max = maoc_capacity(result.params.soil)
         @test all(M_eq .<= M_max + 1e-15)
 
         # M_eq should be monotonic with C (higher C → higher M_eq)

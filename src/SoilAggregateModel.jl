@@ -91,12 +91,17 @@ export BiologicalProperties, SoilProperties
 export InitialConditions
 export AggregateState, OutputRecord
 export GridInfo, ParameterSet, SimulationResult, IntegratedPools
+export conservation_weight, conservation_weights
 export run_aggregate, run_aggregate_stiff, mol_jacobian_prototype
 export FBDF, KenCarp47, KLUFactorization
 export sauter_mean_diameter, sauter_from_texture, TEXTURE_CLASS_DIAMETERS
 export domain_tessellation, pom_population, log_interpolate_fraction
 export van_genuchten, van_genuchten_inverse
-export compute_r_agg, integrated_pools, carbon_balance_table, radial_profiles
+export compute_r_agg, wet_sieving_stress, critical_binding, integrated_pools, carbon_balance_table, radial_profiles
+export total_system_carbon
 export sieve_class, aggregate_mass, population_statistics
 export aqueous_concentrations, maoc_equilibrium, respiration_rates, carbon_use_efficiency, co2_flux
+export maoc_capacity, K_MA_HIGH_ACTIVITY, K_MA_LOW_ACTIVITY
+export sorption_capacity, C_aqueous
+export R_GAS, P_ATM, M_O2
 end  # module SoilAggregateModel

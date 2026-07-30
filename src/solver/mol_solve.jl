@@ -144,7 +144,7 @@ function run_aggregate_stiff(bio::BiologicalProperties, soil::SoilProperties,
 
     # Reference total, with the respired term zeroed so it is pools + POM only.
     state.CO2_cumulative = 0.0
-    C_total_initial = compute_total_carbon(state, grid.r_grid, grid.h)
+    C_total_initial = compute_total_carbon(state, grid)
 
     # Cumulative respired carbon is recovered here rather than integrated during
     # the solve: it is what has left the pools. `mass_balance_error` is set to
@@ -159,7 +159,7 @@ function run_aggregate_stiff(bio::BiologicalProperties, soil::SoilProperties,
         st = deepcopy(state)
         vector_to_state!(st, sol.u[idx])
         st.CO2_cumulative = 0.0
-        st.CO2_cumulative = C_total_initial - compute_total_carbon(st, grid.r_grid, grid.h)
+        st.CO2_cumulative = C_total_initial - compute_total_carbon(st, grid)
         if st.CO2_cumulative < co2_prev
             co2_monotonic = false
             @warn "run_aggregate_stiff: recovered respired carbon decreased — carbon is being created somewhere" t previous=co2_prev now=st.CO2_cumulative
