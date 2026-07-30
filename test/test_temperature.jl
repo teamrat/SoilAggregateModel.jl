@@ -50,6 +50,18 @@ import SoilAggregateModel: arrhenius, arrhenius_ratio, q10_equivalent,
 
         # Symmetric property
         @test arrhenius_ratio(Ea, T1, T2) ≈ 1.0 / arrhenius_ratio(Ea, T2, T1)
+
+        # arrhenius_ratio IS arrhenius with T1 as the reference — bitwise, so
+        # there is one exponential in the package and not two that agree.
+        @test arrhenius_ratio(Ea, T1, T2) == arrhenius(Ea, T2, T1)
+
+        # van't Hoff is the same exponential with ΔH_sol in place of Ea. Bitwise
+        # for the same reason. This is the identity that collapsed henry.jl's
+        # copy, so it is the tripwire if someone re-expands it.
+        ΔH = -12_000.0
+        @test henry_vant_hoff(31.25, ΔH, 293.15, 298.15) ==
+              31.25 * arrhenius_ratio(ΔH, 293.15, 298.15)
+        @test henry_vant_hoff(31.25, ΔH, 298.15, 298.15) == 31.25
     end
 
     @testset "Q10 equivalent" begin

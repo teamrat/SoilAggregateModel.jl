@@ -58,7 +58,11 @@ K_H = henry_vant_hoff(31.25, -12_000.0, 303.15, 298.15)
 - This is the CORRECTED formula - manuscript has an erroneous negative sign
 """
 function henry_vant_hoff(K_H_ref::Real, ΔH_sol::Real, T::Real, T_ref::Real)
-    K_H_ref * exp(ΔH_sol / R_GAS * (1.0 / T - 1.0 / T_ref))
+    # van't Hoff and Arrhenius are the same exponential with ΔH_sol in place of
+    # Ea; `arrhenius_ratio(ΔH_sol, T, T_ref)` IS exp(ΔH/R·(1/T − 1/T_ref)), so
+    # this is bitwise identical to writing it out and there is one exponential
+    # in the package rather than three.
+    K_H_ref * arrhenius_ratio(ΔH_sol, T, T_ref)
 end
 
 """

@@ -52,3 +52,14 @@ const M_O2  = 0.032
 # REFERENCE.md §26 erratum 12.
 const K_MA_HIGH_ACTIVITY = 0.086
 const K_MA_LOW_ACTIVITY  = 0.048
+
+# Steepness of the sigmoid threshold `sigmoid_threshold(x, x_min, steepness)`,
+# expressed as β·x_min so it is scale-free in x.
+#
+# 50 is used by the three viability thresholds h_B, h_E and h_Fi: the switch
+# spans roughly x_min ± 0.1·x_min. It was a bare literal at all three sites.
+# 10 is used by the POM activation delay, whose width was written as
+# `0.1·t_delay`, i.e. β = 1/(0.1·t_delay) = 10/t_delay. Neither number has a
+# citation; both are working assumptions inherited from the MATLAB code.
+const SIGMOID_STEEPNESS    = 50.0
+const POM_DELAY_STEEPNESS  = 10.0

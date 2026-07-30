@@ -38,10 +38,7 @@ where β_E = 50/E_min.
 - Analogous to h_B and h_Fi
 """
 function h_E(E::Real, E_min::Real)
-    β_E = 50.0 / E_min
-    # Numerically stable sigmoid: 1 / (1 + exp(-β_E * (E - E_min)))
-    # Avoids overflow when E >> E_min
-    1.0 / (1.0 + exp(-β_E * (E - E_min)))
+    sigmoid_threshold(E, E_min, SIGMOID_STEEPNESS)
 end
 
 """

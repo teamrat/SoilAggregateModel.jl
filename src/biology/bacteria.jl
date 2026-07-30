@@ -39,10 +39,7 @@ where β = 50/B_min.
 - Prevents biomass from going negative
 """
 function h_B(B::Real, B_min::Real)
-    β = 50.0 / B_min
-    # Numerically stable sigmoid: 1 / (1 + exp(-β * (B - B_min)))
-    # Avoids overflow when B >> B_min
-    1.0 / (1.0 + exp(-β * (B - B_min)))
+    sigmoid_threshold(B, B_min, SIGMOID_STEEPNESS)
 end
 
 """

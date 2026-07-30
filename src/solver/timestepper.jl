@@ -54,10 +54,9 @@ Run aggregate simulation with Strang splitting and adaptive timestep.
 - `t_end::Real`: End time [days]
 - `dt_initial::Real`: Initial timestep [days]
 - `t_delay::Real`: POM activation delay [days] (default: 0.0, no delay).
-  When > 0, POM dissolution is suppressed via sigmoid
-  1/(1+exp(-(t-t_delay)/(0.1·t_delay))), allowing microbial pools to
-  equilibrate before POM input begins. Transition width is 10% of delay
-  (e.g., t_delay=10 → 90% activation by t ≈ 12.2).
+  When > 0, POM dissolution is suppressed by `pom_delay_factor(t, t_delay)`,
+  allowing microbial pools to equilibrate before POM input begins. Transition
+  width is 10% of the delay (t_delay=10 → 90% activation by t ≈ 12.2).
 - `dt_min::Real`: Minimum allowed timestep [days] (default: 1e-4)
 - `dt_max::Real`: Maximum allowed timestep [days] (default: 0.1)
 - `output_interval::Real`: Time between outputs [days] (default: 1.0)
@@ -195,13 +194,7 @@ function run_simulation(state::AggregateState, workspace::Workspace,
         θ_a_0 = workspace.θ_a[1]
         # O₂ state variable is already aqueous concentration
         O_aq_0 = state.O[1]
-        R_P_max_T = bio.R_P_max * workspace.f_T.f_pom
-        # POM activation delay: sigmoid switch centered at t_delay
-        # When t_delay = 0: no effect
-        # When t_delay > 0: smoothly transitions from 0 → 1 around t = t_delay
-        if t_delay > 0.0
-            R_P_max_T *= 1.0 / (1.0 + exp(-(t - t_delay) / (0.1 * t_delay)))
-        end
+        R_P_max_T = bio.R_P_max * workspace.f_T.f_pom * pom_delay_factor(t, t_delay)
         J_P_val = J_P(state.P, state.P_0, B_0, F_n_0, θ_0, O_aq_0, R_P_max_T,
                      bio.K_B_P, bio.K_F_P, bio.θ_P, bio.L_P)
 

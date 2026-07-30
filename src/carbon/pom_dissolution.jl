@@ -66,3 +66,26 @@ R_P = 4π·r₀²·J_P
 function R_P(J_P_val::Real, r_0::Real)
     4.0 * π * r_0^2 * J_P_val
 end
+
+"""
+    pom_delay_factor(t::Real, t_delay::Real)
+
+Multiplier on `R_P_max` implementing the POM activation delay [-].
+
+    t_delay ≤ 0  ->  1.0 exactly (no delay)
+    t_delay > 0   ->  sigmoid_threshold(t, t_delay, POM_DELAY_STEEPNESS)
+
+The switch is centred on `t = t_delay` (factor 0.5 there) with a transition
+width of `t_delay / POM_DELAY_STEEPNESS`, i.e. 10 % of the delay: `t_delay = 10`
+reaches 90 % activation at `t ≈ 12.2`. Its purpose is to let the microbial pools
+equilibrate before POM input begins.
+
+Both solvers call this. It was written out separately in `timestepper.jl` and
+`mol.jl`, which is the one place the two integrators could silently disagree on
+when POM turns on — and the audit's open question about them is whether they
+agree.
+"""
+function pom_delay_factor(t::Real, t_delay::Real)
+    t_delay > 0.0 || return 1.0
+    return sigmoid_threshold(t, t_delay, POM_DELAY_STEEPNESS)
+end

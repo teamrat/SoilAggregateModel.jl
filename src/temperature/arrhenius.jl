@@ -74,7 +74,9 @@ ratio = arrhenius_ratio(60_000.0, 293.15, 303.15)
 ```
 """
 function arrhenius_ratio(Ea::Real, T1::Real, T2::Real)
-    exp(Ea / R_GAS * (1.0 / T1 - 1.0 / T2))
+    # k(T2)/k(T1) is arrhenius with T1 playing the reference role. Same
+    # expression, so this is bitwise identical to writing the exponential again.
+    arrhenius(Ea, T2, T1)
 end
 
 """

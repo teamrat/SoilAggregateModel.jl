@@ -229,10 +229,7 @@ where β_F = 50/F_i_min.
 - Analogous to h_B for bacteria
 """
 function h_Fi(F_i::Real, F_i_min::Real)
-    β_F = 50.0 / F_i_min
-    # Numerically stable sigmoid: 1 / (1 + exp(-β_F * (F_i - F_i_min)))
-    # Avoids overflow when F_i >> F_i_min
-    1.0 / (1.0 + exp(-β_F * (F_i - F_i_min)))
+    sigmoid_threshold(F_i, F_i_min, SIGMOID_STEEPNESS)
 end
 
 """

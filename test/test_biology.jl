@@ -10,7 +10,35 @@ import SoilAggregateModel: TemperatureCache,
                            R_F, Resp_F, h_Fi, R_rec_F, fungal_transitions,
                            Pi_protected, Y_F_const, Y_F_uptake_dependent, Gamma_F,
                            h_E, R_rec_E,
-                           softplus, M_eq_langmuir_freundlich, J_M
+                           softplus, M_eq_langmuir_freundlich, J_M,
+                           sorption_capacity, C_aqueous,
+                           sigmoid_threshold, SIGMOID_STEEPNESS
+
+@testset "sigmoid_threshold — the one switch behind h_B, h_E, h_Fi" begin
+    # 0.5 at the centre, monotone, bounded. These hold for any steepness.
+    for s in (1.0, 10.0, 50.0)
+        @test sigmoid_threshold(2.0, 2.0, s) == 0.5
+        @test 0.0 < sigmoid_threshold(0.5, 2.0, s) < 0.5
+        # <= 1.0, not < 1.0: at steepness 50 the tail is exp(-150) ~ 7e-66,
+        # which 1 + x rounds away, so the factor IS exactly 1.0 in Float64.
+        @test 0.5 < sigmoid_threshold(8.0, 2.0, s) <= 1.0
+    end
+
+    # Scale-free in x: steepness is β·x_min, so the same x/x_min gives the same
+    # factor whatever the units. This is what lets one primitive serve pools in
+    # µg/mm³ and a delay in days.
+    @test sigmoid_threshold(1.5, 1.0, 50.0) == sigmoid_threshold(150.0, 100.0, 50.0)
+
+    # Stable where the manuscript's exp(βx)/[exp(βx)+exp(βx_min)] overflows
+    @test sigmoid_threshold(1.0e6, 1.0, 50.0) == 1.0
+    @test sigmoid_threshold(0.0, 1.0, 50.0) > 0.0
+
+    # The three named thresholds ARE this function — bitwise, not approximately
+    @test h_B(0.37, 1.0)  == sigmoid_threshold(0.37, 1.0, SIGMOID_STEEPNESS)
+    @test h_E(2.4, 0.8)   == sigmoid_threshold(2.4, 0.8, SIGMOID_STEEPNESS)
+    @test h_Fi(0.05, 0.2) == sigmoid_threshold(0.05, 0.2, SIGMOID_STEEPNESS)
+    @test SIGMOID_STEEPNESS == 50.0
+end
 
 @testset "Bacteria" begin
     @testset "h_B sigmoid" begin
@@ -569,4 +597,26 @@ end
     # Resp_F_conv is cost of F_i ↔ F_m and F_n ↔ F_m transitions, not from new uptake
     Fungal_balance = R_F_val - (Γ_F_val + Resp_F_val)
     @test abs(Fungal_balance) < 1e-10
+end
+
+@testset "DOC partition primitives" begin
+    # C is total soluble carbon per bulk volume and splits C = θ·C_aq + ρ_b·k_d·C_aq.
+    # Asserting that identity, not the formula: it is what makes C_aqueous the
+    # inverse of the partition rather than an arbitrary division.
+    soil = SoilProperties(ρ_b = 1370.0, k_d_eq = 0.005)
+    θ, C = 0.29, 11.4
+
+    C_aq = C_aqueous(C, θ, soil)
+    @test θ * C_aq + soil.ρ_b * soil.k_d_eq * C_aq ≈ C rtol=1e-14
+    @test sorption_capacity(θ, soil.ρ_b, soil.k_d_eq) ≈ θ + soil.ρ_b * soil.k_d_eq
+
+    # No sorption: every µg is aqueous, and C_aq is C per unit water.
+    @test C_aqueous(C, θ, SoilProperties(ρ_b = 1370.0, k_d_eq = 0.0)) ≈ C / θ
+
+    # Linear in C, so the ω dilution passes through it unchanged (erratum 13).
+    @test C_aqueous(2C, θ, soil) ≈ 2 * C_aqueous(C, θ, soil) rtol=1e-14
+
+    # Raising k_d takes carbon out of solution without changing the total.
+    hi = C_aqueous(C, θ, SoilProperties(ρ_b = 1370.0, k_d_eq = 0.05))
+    @test hi < C_aq
 end

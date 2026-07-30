@@ -5,6 +5,38 @@ Shared mathematical utility functions.
 """
 
 """
+    sigmoid_threshold(x::Real, x_min::Real, steepness::Real)
+
+Smooth 0 → 1 switch centred on `x_min`:
+
+    1 / (1 + exp(-β·(x - x_min))),     β = steepness / x_min
+
+`steepness` is dimensionless (it is β·x_min), so the width of the transition is
+a fixed fraction of `x_min` whatever the units of `x`. Returns exactly 0.5 at
+`x = x_min`, → 0 for `x ≪ x_min`, → 1 for `x ≫ x_min`.
+
+This form is the numerically stable one: the algebraically equivalent
+`exp(βx) / [exp(βx) + exp(βx_min)]` written in the manuscript overflows for
+`x ≫ x_min`, while this does not.
+
+The single definition behind `h_B`, `h_E`, `h_Fi` (steepness `SIGMOID_STEEPNESS`)
+and the POM activation delay (`POM_DELAY_STEEPNESS`). Those four had the same
+three lines written out four times.
+
+# Arguments
+- `x`: the quantity being switched on
+- `x_min`: switch centre, same units as `x`; must be > 0
+- `steepness`: β·x_min [-]
+
+# Returns
+- Factor in (0, 1)
+"""
+function sigmoid_threshold(x::Real, x_min::Real, steepness::Real)
+    β = steepness / x_min
+    1.0 / (1.0 + exp(-β * (x - x_min)))
+end
+
+"""
     softplus(x::Real, ε::Real)
 
 Smooth approximation to max(0, x) via softplus: ε·ln(1 + exp(x/ε)).

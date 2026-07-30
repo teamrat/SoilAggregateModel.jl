@@ -106,7 +106,7 @@ Temperature dependence:
 - **D_C0(T)**: Stokes-Einstein via VFT viscosity ratio (valid 273–373 K)
 - **D_O2_w(T)**: Han & Bartels (1996) empirical formula
 - **D_O2_a(T)**: Chapman-Enskog, ∝ (T/T_ref)^1.75
-- **K_H(T)**: van't Hoff: `K_H_ref · exp[ΔH_sol/R · (1/T − 1/T_ref)]` — **no leading negative sign**
+- **K_H(T)**: van't Hoff: `K_H_ref · exp[ΔH_sol/R · (1/T − 1/T_ref)]` — **no leading negative sign**. This is `arrhenius_ratio(ΔH_sol, T, T_ref)`, and `henry_vant_hoff` calls it: van't Hoff and Arrhenius are one exponential with ΔH_sol in place of Ea, so the package has one and not three.
 
 ---
 
@@ -1690,7 +1690,7 @@ differences.
 **Solution.** Three sigmoid functions enforce soft lower bounds:
 
 $$
-h(x) = \frac{\exp(\beta\, x)}{\exp(\beta\, x) + \exp(\beta\, x_{\min})}
+h(x) = \frac{\exp(\beta\, x)}{\exp(\beta\, x) + \exp(\beta\, x_{\min})} = \frac{1}{1 + \exp[-\beta(x - x_{\min})]}
 $$
 
 with $\beta = 50 / x_{\min}$, giving a smooth transition from 0 to 1 over a width of approximately $4 x_{\min} / 50$. Applied to:
@@ -1702,6 +1702,10 @@ with $\beta = 50 / x_{\min}$, giving a smooth transition from 0 to 1 over a widt
 | $h_E(E)$ | EPS | $E_{\min}$ | Shuts off EPS recycling near depletion |
 
 These prevent numerical extinction artifacts where a pool oscillates around zero due to competing production and consumption terms. The sigmoid ensures a smooth, monotonic approach to zero rather than oscillatory overshoot.
+
+**Implementation.** The two forms above are algebraically identical; the code uses the right-hand one, because the left-hand one overflows for $x \gg x_{\min}$. `sigmoid_threshold(x, x_min, steepness)` in `src/math_utils.jl` is the single definition, with `steepness` $= \beta x_{\min}$ so it is scale-free in $x$. `h_B`, `h_E` and `h_Fi` call it with `SIGMOID_STEEPNESS = 50`, and the POM activation delay `pom_delay_factor(t, t_delay)` calls it with `POM_DELAY_STEEPNESS = 10` — the delay is the same switch centred on $t_{delay}$ with a width of $t_{delay}/10$, which was not previously visible from either write-out. Neither steepness has a citation; both are working assumptions carried over from the MATLAB code.
+
+`pom_delay_factor` returns exactly 1 when `t_delay ≤ 0`, which is every configuration in `paper/`. Both `timestepper.jl` and `mol.jl` call it, so the two integrators cannot disagree on when POM turns on.
 
 ---
 

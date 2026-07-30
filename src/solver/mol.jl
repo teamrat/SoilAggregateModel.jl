@@ -209,10 +209,7 @@ function mol_rhs!(du, u, p, t)
     # --- POM dissolution: one flux, used with opposite signs so the transfer
     #     from P into C at node 1 is exact rather than merely consistent ---
     P_val    = u[mol_iP(n)]
-    R_P_max_T = bio.R_P_max * Tc.f_pom
-    if p.t_delay > 0.0
-        R_P_max_T *= 1.0 / (1.0 + exp(-(t - p.t_delay) / (0.1 * p.t_delay)))
-    end
+    R_P_max_T = bio.R_P_max * Tc.f_pom * pom_delay_factor(t, p.t_delay)
     J_P_val = J_P(P_val, p.P_0,
                   max(u[mol_sid(1, MOL_B)], 0.0),
                   max(u[mol_sid(1, MOL_FN)], 0.0),

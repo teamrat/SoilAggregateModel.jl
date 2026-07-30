@@ -2,9 +2,39 @@
 # Tests for POM dissolution (carbon/pom_dissolution.jl)
 
 using Test
-import SoilAggregateModel: J_P, R_P
+import SoilAggregateModel: J_P, R_P, pom_delay_factor, sigmoid_threshold,
+                           POM_DELAY_STEEPNESS
 
 @testset "POM Dissolution" begin
+
+    # === POM activation delay ===
+    # Previously written out in both timestepper.jl and mol.jl and tested in
+    # neither, which is the one place the two integrators could disagree on when
+    # POM turns on.
+    @testset "pom_delay_factor" begin
+        # No delay is exactly 1.0, so multiplying by it cannot perturb a run
+        @test pom_delay_factor(0.0, 0.0) === 1.0
+        @test pom_delay_factor(7.0, 0.0) === 1.0
+        @test pom_delay_factor(7.0, -1.0) === 1.0
+
+        # Half activation exactly at t_delay
+        @test pom_delay_factor(10.0, 10.0) == 0.5
+
+        # Suppressed before, released after; monotone through the switch
+        @test pom_delay_factor(0.0, 10.0) < 1.0e-4
+        f = [pom_delay_factor(t, 10.0) for t in 0.0:0.5:20.0]
+        @test all(diff(f) .> 0.0)
+
+        # Documented width: 90 % activation by t ≈ 12.2 for t_delay = 10
+        @test pom_delay_factor(12.2, 10.0) > 0.9
+        @test pom_delay_factor(11.0, 10.0) < 0.9
+
+        # It is the shared primitive, not a second sigmoid
+        @test pom_delay_factor(6.0, 10.0) ==
+              sigmoid_threshold(6.0, 10.0, POM_DELAY_STEEPNESS)
+        @test POM_DELAY_STEEPNESS == 10.0
+    end
+
     # === Test 1: Known inputs — verify formula ===
     @testset "Known inputs" begin
         # Reference values
