@@ -113,7 +113,19 @@ At each grid point i independently, compute source/sink terms and advance. ALL 8
 
 POM dissolution is enzymatic, driven by microbial activity at the POM surface. The dissolution rate depends on local biomass, water content, and oxygen:
 
-$$R_P = 4\pi r_0^2 \; R_P^{\max} \; \frac{P}{P_0} \; \frac{B_0}{K_{B,P} + B_0} \; \frac{F_{n,0}}{K_{F,P} + F_{n,0}} \; \frac{\theta_0}{\theta_P + \theta_0} \; \frac{O_{aq,0}}{L_P + O_{aq,0}}
+$$R_P = 4\pi r_0^2 \; R_P^{\max} \; \frac{P}{P_0} \; \tfrac{1}{2}\left(\frac{B_0}{K_{B,P} + B_0} + \frac{F_{n,0}}{K_{F,P} + F_{n,0}}\right) \; \frac{\theta_0}{\theta_P + \theta_0} \; \frac{O_{aq,0}}{L_P + O_{aq,0}}
+
+**Additive, not multiplicative.** The two microbial terms are averaged, not
+multiplied. Depolymerisation is extracellular and acts on the substrate, so
+enzymes from either community suffice: at saturating biomass of one community
+alone the rate is half maximal, and both at saturation recover the full rate. A
+product form would assert that POM cannot be depolymerised without both
+populations present, which is false — white-rot fungi mineralise lignin without
+bacteria, and cellulolytic bacteria act without fungi. The equal weighting is a
+stated default and is calibratable; the additive *form* is not. Matches
+`manuscript-4-5.tex` Eq.~(\ref{eq:R_P}) and
+`src/carbon/pom_dissolution.jl:36-38`.
+
 
 $$
 
@@ -213,7 +225,7 @@ Six distinct activation energies:
 | Process | Symbol | Default (J/mol) | Applied to |
 |---------|--------|-----------------|------------|
 | Bacterial metabolism | 𝓔_{a,B} | 60,000 | μ_max_B, m_B, r_{B,max} |
-| Fungal metabolism | 𝓔_{a,F} | 55,000 | μ_max_F, m_F, α_i, α_n, β_i, β_n, ζ, D_Fn0, D_Fm0 |
+| Fungal metabolism | 𝓔_{a,F} | 55,000 | μ_max_F, m_F, α_i, α_n, β_i, β_n, D_Fn0, D_Fm0 — **not ζ**, which is a splitting fraction and is not temperature-scaled (2026-07-30) |
 | EPS degradation | 𝓔_{a,E} | 50,000 | μ_E_max (k_EPS) |
 | MAOC sorption | 𝓔_{a,s} | 25,000 | κ_s |
 | MAOC desorption | 𝓔_{a,d} | 40,000 | κ_d |
@@ -513,10 +525,10 @@ struct SoilProperties
     ρ_b::Float64            # Bulk density [μg/mm³]
 
     # MAOC capacity (Langmuir-Freundlich)
-    M_max::Float64          # Maximum sorption capacity [μg/mm³]
     k_L::Float64            # Langmuir affinity [mm³/μg]
     n_LF::Float64           # Freundlich exponent [-]
-    k_ma::Float64           # Mineral activity coefficient [μg-C/g-mineral]
+    k_ma::Float64           # MAOC capacity per g clay+silt [g-C/g-mineral, dimensionless]
+                            # M_max = maoc_capacity(soil) = k_ma·f_clay_silt·ρ_b
     f_clay_silt::Float64    # Clay+silt mass fraction [-]
 
     # Reference diffusion at T_ref [mm²/day]

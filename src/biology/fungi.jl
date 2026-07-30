@@ -261,7 +261,7 @@ end
 """
     fungal_transitions(F_i::Real, F_n::Real, F_m::Real, Π::Real,
                       α_i_T::Real, α_n_T::Real, β_i_T::Real, β_n_T::Real,
-                      ζ_T::Real, δ::Real, η::Real, ε_F::Real)
+                      ζ::Real, δ::Real, η::Real, ε_F::Real)
 
 Compute all fungal transition rates and conversion respiration.
 
@@ -301,7 +301,9 @@ Source terms (reactions.jl):
 - `Π`: Mobile-to-immobile ratio (from Pi_protected) [-]
 - `α_i_T`, `α_n_T`: Immobilization (gain) rates at current T [1/day]
 - `β_i_T`, `β_n_T`: Mobilization (loss) rates at current T [1/day]
-- `ζ_T`: Insulation splitting fraction at current T [-] (NOT a rate!)
+- `ζ`: Insulation splitting fraction [-]. NOT a rate, and NOT temperature-
+  scaled: it is the share of settling carbon that lands insulated, and no
+  argument was found for that share rising with temperature (2026-07-30).
 - `δ`: Immobilization exponent, Falconer's θ [-] (θ > 1)
 - `η`: Conversion efficiency [-] (η < 1)
 - `ε_F`: Regularization for Π [μg/mm³]
@@ -320,7 +322,7 @@ Source terms (reactions.jl):
 """
 function fungal_transitions(F_i::Real, F_n::Real, F_m::Real, Π::Real,
                            α_i_T::Real, α_n_T::Real, β_i_T::Real, β_n_T::Real,
-                           ζ_T::Real, δ::Real, η::Real, ε_F::Real)
+                           ζ::Real, δ::Real, η::Real, ε_F::Real)
     # Net SIGNED tendency, Falconer (2005) eq. 2.4:  γ(α·π^θ − β·π)·b
     #   α (immobilization, the gain) carries the exponent
     #   β (mobilization, the loss) is linear in Π
@@ -335,8 +337,8 @@ function fungal_transitions(F_i::Real, F_n::Real, F_m::Real, Π::Real,
 
     # ζ splits trans_n: fraction ζ goes to F_i, fraction (1-ζ) stays as F_n
     # (Falconer 2005/2008, MATLAB lines 389-390)
-    immobil_i = trans_i + ζ_T * trans_n
-    immobil_n = (1.0 - ζ_T) * trans_n
+    immobil_i = trans_i + ζ * trans_n
+    immobil_n = (1.0 - ζ) * trans_n
 
     # Conversion respiration: CRITICAL abs() for mobilization
     # When mobilization dominates (net < 0), respiration is still positive

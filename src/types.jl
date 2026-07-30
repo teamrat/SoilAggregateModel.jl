@@ -3,7 +3,7 @@
 
 Core type definitions for the soil aggregate biogeochemical model.
 
-All types follow the architecture specification (docs/ARCHITECTURE.md — stale in parts, see docs/AUDIT.md).
+All types follow the architecture specification (docs/ARCHITECTURE.md — stale in parts; docs/BACKLOG.md item 12).
 Units: μg/mm³ (= kg/m³), mm, days, kPa, K, J/mol throughout.
 
 # Fill convention

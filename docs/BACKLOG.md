@@ -1,15 +1,29 @@
 # Backlog
 
-Working state. Updated as items move; **not** a journal — history lives in
-`docs/REFERENCE.md` §26 and the audit documents.
+**The only list of open work.** Updated as items move; **not** a journal —
+history lives in `docs/REFERENCE.md` §26 and the archived audits.
 
-Last commit: `54efc51` (2026-07-28). This file covers the 2026-07-29 solver work.
+One rule, because breaking it cost a day: **an item is closed by pointing at code
+or at the manuscript, never at another note.** Three times on 2026-07-30 a closed
+item was re-reported as open because the note had not been updated when the source
+was, and the note was read as evidence. If this file and the code disagree, this
+file is what is wrong.
+
+Absorbed the housekeeping audit on 2026-07-30 (items 8–14 below). It is archived
+at `docs/_archive/AUDIT_20260729.md` and holds the evidence trail for everything it
+closed.
 
 ---
 
 ## Dependency order
 
-**Speed is DONE** (item 1). Remaining: **anchors → decisions → fit.**
+**Speed is DONE** (item 1). Duplication is DONE (archived audit §B, four passes).
+Remaining: **verification → anchors → decisions → fit.**
+
+Item 8 is DONE (2026-07-30): the solvers agree, and the split solver's production
+`dt_min` was the reason it looked otherwise. Item 9 — tests for the default
+solver — is now first, and 8 supplies its tolerance: 3e-3 on the interior pools
+once the split solver is converged.
 
 Fitting free parameters while anchored ones sit off their cited values absorbs
 the Group B error into the free ones and makes the deviation invisible. Items 3
@@ -38,7 +52,8 @@ solver's falls. Multi-year integration is possible with one and not the other.
 
 Practically: one parameter evaluation across five diameters is now ~8 s instead
 of ~200 s, so a 500-evaluation fit is about an hour at full n=200 — no need for
-the n=80 coarse grid `optimize_soil3.jl` uses.
+a coarse grid. (Measured 07-30 on the current config: 1.16 s per aggregate at
+n=200, ~12 s for all ten classes.)
 
 **Diagnosis, for the record.** Δt was set by DOC at the nodes next to the POM
 surface, not by the 1e-6 denominator guard (tested and killed) and not by oxygen
@@ -104,36 +119,53 @@ values) and the CO₂ curves are secondary; note the CO₂ caveat in spec §5.3
 
 **Blocked by:** items 1, 3, 4, and the Group B anchors below.
 
-Also: `optimize_soil3.jl` has not been migrated to `degryze_soils.jl` — it still
-hard-codes `ρ_bulk = 1300`, `SOC = 0.0221`, `ψ = −29`, `f_clay_silt = 0.74` for
-soil 3. Its stored fit is invalid regardless, having been made against the
-broken POM normalization.
+Also: `optimize_soil3.jl` was archived on 2026-07-30
+(`paper/_archive/degryze_tooling_20260730/`) rather than migrated. It forked the
+configuration and hard-coded both the soil-3 properties and the measured CO₂
+series; its stored fit was invalid regardless, having been made against the
+broken POM normalization. Calibration is a separate future project: get the fit
+visually close by hand first, then build one reusable fitting routine that every
+example can use, tested against De Gryze.
 
-## 3. `M_max` has two values, 29× apart — needs a decision
+## ~~3. `M_max` has two values~~ — **CLOSED 2026-07-29**
 
-`initial_conditions.jl:382` computes `M_max = k_ma·f_clay_silt·ρ_b = 288` and
-partitions the initial MAOC pool against it. `reactions.jl:152` evolves that
-pool against `soil.M_max = 10`. Every run therefore opens with MAOC far above
-the isotherm ceiling and produces a spurious desorption pulse. The guard at
-`initial_conditions.jl:418` compares against 288 and never fires.
+Resolved by REFERENCE.md §26 erratum 12. The `SoilProperties.M_max` field is
+deleted; `maoc_capacity(soil) = k_ma·f_clay_silt·ρ_b` in `src/biology/maoc.jl`
+is the only definition. `k_ma` is now dimensionless and anchored to Georgiou et
+al. (2022) — 0.048 low-activity, 0.086 high-activity — which also corrects a 10×
+error in the old 0.48 (it was 48 mg/g with the mg→g conversion dropped).
 
-`maoc.jl:44` states `M_max = k_ma·f_clay_silt·ρ_b` as definitional, which would
-make 288 intended — but the units do not close as written (`k_ma` is per **gram**
-of mineral, `ρ_b` is µg/mm³). Needs the intended definition and its units.
-`REFERENCE.md` §5a.
+Remaining, and it is a soil property rather than an open decision: which
+mineralogy each soil has. De Gryze's five are one Belgian loess-derived profile,
+so all low-activity (`degryze_soils.jl`).
 
-## 4. `delta` — and it is coupled to `beta`
+Downstream: `degryze_config.jl`'s `κ_d_ref = 1e-4` override was justified partly
+by the desorption pulse this caused. That half of its justification is void; the
+value was left unchanged so the M_max fix can be measured on its own.
 
-Default is 1.0 (MATLAB linear case); Falconer runs θ = 1.0 as a control and
-θ = 3.0 as the nonlinear case. Three values have been in play historically
-(2.0 in the docs until 2026-07-27, 1.0 in code, 3.0 in Falconer) and nobody
-recorded why 1.0 was chosen.
+## 4. `delta`, `beta`, `alpha`, `zeta` — calibration, not architecture
 
-**δ barely does anything while β = 0.** The exponent sits on the gain, `α·Π^δ`,
-and with mobilization disabled there is no competing linear loss for it to cross
-over against. Raising δ alone rescales the transition rate rather than producing
-the threshold behaviour Falconer describes. **Decide δ and β together.**
-`REFERENCE.md` §5a.
+**Not a defect and not blocking.** The architecture question was settled
+2026-07-30: ζ is a constant splitting fraction with no temperature dependence,
+matching Falconer [2005] p. 1728. The values are a calibration matter and are
+deferred to the De Gryze fit.
+
+What De Gryze runs today: **δ = 1.0, β_i = β_n = 0, α_i = 0.1, α_n = 0.15,
+ζ = 0.2** — every one inherited from the package default, which is the MATLAB
+precursor's set, which is Falconer with θ = 1 and β = 0. `degryze_config.jl` sets
+none of them.
+
+Falconer's published values are tabulated in `src/parameters.jl` at the default
+block, so whoever calibrates has them at the call site rather than in a note.
+Two facts from there worth carrying: **ζ = 0.01 in every simulation of both
+papers**, against our 0.2; and **θ = 3.0 is the only published value above 1**,
+used for the [2005] cases that produce the ring/aggregation patterns, while
+[2008] uses 1.0 throughout.
+
+With β = 0 the exponent has no linear loss to cross over against, so δ only
+rescales the transition rate. **δ and β are one decision, not two.**
+
+---
 
 ## 5. Group B parameters off their cited anchors
 
@@ -147,11 +179,140 @@ the threshold behaviour Falconer describes. **Decide δ and β together.**
 sits flat. May be downstream of 1, 3 or 5 rather than its own defect — revisit
 after those.
 
-## 7. CO₂ overshoot
+## ~~7. CO₂ overshoot~~ — **CLOSED 2026-07-30, by manual tuning**
 
-3599.7 vs measured 2139 µg-C/g at day 21 for soil 3, about 1.7×. Both sides are
-total respiration (spec §0a A3), so the discrepancy is real rather than a
-partitioning artefact.
+Was 3599.7 against a measured 2139 µg-C/g at day 21 for soil 3, about 1.7×.
+Closed in the course of the hand-tuning campaign, not by a single identified
+cause, so there is no defect to point at — the parameters that moved are the ones
+listed as working assumptions below.
+
+---
+
+## ~~8. Solver agreement~~ — **RUN 2026-07-30.** Result in REFERENCE §17a
+
+The two solvers describe the same model, and the split solver's production floor
+is what was hiding it.
+
+At `dt_min = 1e-4` the split solver differs from stiff by up to 4.2e-2 (F_m).
+Refining to 1e-5 shrinks **all eight** field gaps, median factor 9 — first order
+in Δt, i.e. the documented one-step lag in θ and D, not a defect. The split
+answer converges *toward* stiff, which is what licenses trusting stiff.
+Carbon balance on the split run: −2.7e-13.
+
+The reported quantities were never at risk: at the production floor `r_agg`
+agrees to 3.6e-3, CO₂ to 2.2e-4, POM to 6.4e-5. The 4 % is in the fast interior
+pools.
+
+**Consequence:** every earlier split-vs-stiff comparison was made at
+`dt_min = 1e-4` and therefore *understates* the agreement.
+
+**Not a validation.** Two discretisations agreeing is consistency, not
+verification against an analytic solution.
+
+**Re-run** after any change to the source terms or the discretisation, and after
+any parameter change that alters stiffness. The claim in §17a is only as current
+as the last run.
+
+*The script had two defects, fixed the same day: no warm-up, so it printed a 1.6×
+speedup against the documented 24×; and its verdict tested the size of the
+movement on refinement, not the direction, so it would have said "trust stiff"
+even if the split answer had moved away. The measured gaps were unaffected.*
+
+---
+
+## 9. `run_aggregate_stiff` has no tests
+
+The default solver — the one every number comes from — has **zero** direct
+coverage. Needed, in order:
+
+- one end-to-end call to `run_aggregate_stiff`;
+- `mol_laplacian` pinned against `crank_nicolson_step!`. `mol.jl` reproduces that
+  Laplacian term for term deliberately, a reader verified all three branches
+  including the `D₁` cancellation at the flux boundary, and **no test holds them
+  together** — the sanction is a comment;
+- a short-horizon version of item 8's Part 1 as a test, so a change to the source
+  terms fails the suite instead of waiting to be noticed;
+- the two default divergences between the solvers: `n_grid` 50 vs 200, and the
+  output schedules (1-day interval vs exactly two records);
+- `test_output_times.jl:63` asserts `|mass_balance_error| < 1e-12`, which the
+  stiff path cannot satisfy by design — it reports NaN because it recovers CO₂ by
+  difference.
+
+**Tolerance, from item 8:** 3e-3 on the interior pools with the split solver at
+`dt_min = 1e-5`; do not write a test against its production floor, which is not
+converged. For a short-horizon test the lag is smaller still.
+
+---
+
+## 10. No parameter has a firm value yet
+
+Not a defect, and this replaces the entry that treated `κ_s_ref` and `κ_d_ref` as
+one. **Unless a parameter carries a citation it is a working assumption.** The
+current set came from hand-tuning against soil 3 and is the best available
+starting point, nothing more. That applies to `κ_s_ref` (0.1 → 0.01) and
+`κ_d_ref` (0.01 → 1e-4) as much as to `κ_b`, `w_E`, `p_Gc`, `R_P_max`, `f_bact`
+and `f_eps`.
+
+Two consequences worth keeping in view rather than acting on:
+
+- The package defaults are earlier guesses, not reasoned values. The best De
+  Gryze set should become the defaults once there is one.
+- The elasticities in the archived sensitivity sweep were measured while the
+  `M_max` bug was live, so they cannot be quoted.
+
+The parameters that *do* carry an anchor, and the size of the gap to it, are
+item 5.
+
+---
+
+## ~~11. The `ζ` Arrhenius clamp~~ — **CLOSED 2026-07-30: ζ is constant**
+
+**Decision (owner): no temperature effect on ζ.** There is no credible reason for
+the *share* of settling fungal carbon that lands insulated to rise with
+temperature. The Arrhenius factor and the `min(·, 1.0)` clamp are both removed,
+from `reactions.jl` and from the `derived.jl` post-processing copy. `ARCHITECTURE.md`
+§5.1 no longer lists ζ among the rates carrying `Ea_F`.
+
+**This changes results, and not slightly.** De Gryze incubates at 25 °C against
+`T_ref` = 20 °C with `Ea_F` = 55 kJ/mol, so `f_fun` = 1.46 and the effective ζ was
+**0.292, not 0.2** — the value in the parameter table was never the value in
+force. Removing the scaling drops it by 31 %. Less carbon lands insulated, and
+`F_i` is the binder in `F_i + w_E·E ≥ G_c`, so expect a lower `r_agg` and a lower
+MWD. **The hand-tuned fit will need revisiting.**
+
+---
+
+## 12. `ARCHITECTURE.md` — rewrite or retire
+
+698 lines. It documents an `AggregateSolver` type that does not exist, omits the
+default solver entirely, and its `SoilProperties` listing carries fields removed by
+erratum 11. Its still-valid material is §3 (discretisation) and §5 (temperature
+framework). Decide: fold those two into REFERENCE and archive the file, or rewrite
+it against the current code. `src/parameters.jl`, `src/types.jl`, `REFERENCE.md`
+and `GUIDE.md` all point at it with a staleness warning, which is not a stable
+resting place.
+
+---
+
+## 13. REFERENCE.md internal contradictions
+
+Four, found 2026-07-29 and not yet fixed: §3.2 on `F_i_min`, §3.4 on `K_E`, §7 on
+bacterial allocation, §10 on `Resp_B`. Also §4.2 names `clay_fraction` and
+`silt_fraction`, which do not exist as fields, and the `reactions.jl` citation
+cluster is off by roughly 12 lines. At 2096 lines this file is the one everything
+else points at, so a contradiction in it propagates.
+
+---
+
+## 14. Prose volume in `src/`
+
+`src/` is 68 % prose by line; roughly 570 lines are removable, about 250 of them in
+`degryze_config.jl` and `aggregate_radius.jl`. Two things to keep exactly as they
+are: `src/parameters.jl` on the `κ_b` provenance, which exists to stop someone
+restoring `0.0143869` on the belief that it was measured; and the note preventing a
+fit to a datum the model was constructed from. Lowest priority here, but it is the
+same failure as the documentation sprawl — narrative kept where an invariant
+belongs.
 
 ---
 
@@ -167,13 +328,28 @@ partitioning artefact.
 - `dev_notes/` is gitignored but `REFERENCE.md` and `CLAUDE.md` name files in it
   as required reading (`falconer_answers.md`, the MATLAB notes). A fresh clone
   will not have them. Decide: track, or stop referencing.
-- `paper/simulations/single_aggregate_physics/run_simulations.jl` was repaired
-  but **not re-run**; its `data/` and `.log` predate the break.
+- ~~`run_simulations.jl` repaired but not re-run~~ — the
+  whole folder was archived 2026-07-29 to
+  `paper/_archive/simulations_20260729/`. Nothing in it is to be quoted or
+  re-run; the folder is to be rebuilt from scratch once De Gryze yields a trusted
+  parameter set.
 - Sauter 1926 *Forschungsheft* number to verify against a library record before
   submission.
+- `O2_saturation` — the one function in `src/` whose job is ambient O₂ — is called
+  by nothing outside its own test.
+- Speed, if it is ever wanted: measured 2026-07-30, one aggregate is 1.16 s and the
+  sparse linear solve is 33 % of self-time (`klu_l_refactor` 17.9 %,
+  `klu_l_solve` 15.2 %). Arithmetic hoisting in the RHS cannot pay — the three
+  candidates measured 3.0 %, 0.5 % and ~0 %. The levers are whether `n_grid = 200`
+  resolves anything `n_grid = 100` would not, which is a **modelling** question and
+  the cheapest possible win, and whether the block-tridiagonal structure warrants a
+  specialised solver instead of general sparse KLU. Neither is urgent at 12 s per
+  sweep.
+- The respiration rate shows a birth-effect-like feature (owner, 2026-07-29,
+  parked). Not diagnosed.
 - `finite_volumes.jl` — `compute_cell_volumes` has no test and no caller.
   `is_diagonally_dominant` is tested but called from nowhere in `src/`.
-- Test audit items not done (`docs/TEST_AUDIT_2026-07-28.md` §6): the
+- Test audit items not done (`docs/_archive/TEST_AUDIT_2026-07-28.md` §6): the
   217-assertion `total >= aggregate` block, `compute_r_agg` boundary tests
   (G_c = 0.0194 is derivable, so this is cheap and high value), and the
   order-of-accuracy refinement study — which is expected to show first order,
@@ -183,9 +359,12 @@ partitioning artefact.
 
 ## Deferred by decision
 
-- **Sieve-confinement `G_c(r)`** — the radial scale dependence. Partly addressed:
-  texture now enters through `d_32`. What remains is the δ_s curvature limit,
-  recorded as a stated limitation in the manuscript rather than modelled. The
-  MATLAB precursor had `strength ./ x` commented out; no record of why.
+- ~~**Sieve-confinement `G_c(r)`**~~ — **IMPLEMENTED 2026-07-29** as
+  `G_c(r) = G_c(δ_s)·(r/δ_s)^p_Gc` in `critical_binding`. `p_Gc = 0` is the
+  package default, so nothing predating it changed. What is NOT settled: the
+  exponent is fitted, not derived, and the δ_s curvature limit it stands in for
+  is still a stated limitation rather than a solved closure. See REFERENCE.md
+  §4.4a. Open question moved here: **what value of `p_Gc`**, and whether the De
+  Gryze MWD series can identify it separately from `κ_b`.
 - **Two particle-size scalings** (one for EPS, one for hyphae). Rejected: adds a
   parameter, and the single `d_32` scaling covers the observed direction.

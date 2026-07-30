@@ -144,7 +144,8 @@ SoilAggregateModel.jl/
 │   ├── ARCHITECTURE.md       # Implementation architecture (authoritative)
 │   ├── GUIDE.md              # Theory, usage, developer guide
 │   ├── REFERENCE.md          # Variables, parameters, functions, provenance
-│   └── STRUCTURAL_AUDIT_2026-07-27.md # Placement audit and remediation status
+│   ├── BACKLOG.md              # THE list of open work
+│   └── _archive/               # closed audits, kept for the evidence trail
 │
 ├── dev_notes/                # Working notes, MATLAB provenance, open questions
 ├── references/               # Source PDFs

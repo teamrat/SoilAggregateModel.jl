@@ -16,8 +16,8 @@ record it — §26 — rather than assuming the other one is right.
 (renamed 2026-02, see `dev_notes/archive/REPO_REORGANIZATION.md`). **Stale:** it
 documents an `AggregateSolver` type that does not exist, omits the default
 solver entirely, and its `SoilProperties` listing still carries fields removed
-by erratum 11. `docs/AUDIT.md` tracks the decision on whether to rewrite or
-retire it. Do not treat it as current.
+by erratum 11. `docs/BACKLOG.md` item 12 carries the decision on whether to
+rewrite or retire it. Do not treat it as current.
 **Units throughout**: μg/mm³ (= kg/m³), mm, days, kPa, K, J/mol
 
 ---
@@ -158,7 +158,7 @@ See §5a for provenance.
 | β_n | `β_n` | 0.0 | day⁻¹ | **Mobilization** rate from non-insulated (loss; linear in Π) |
 | δ | `delta` | 1.0 | — | Immobilization exponent — Falconer's θ. 1.0 = MATLAB linear case; Falconer's nonlinear runs use 3.0 |
 | η | `η_conv` | 0.8 | — | Conversion efficiency (Falconer's γ); (1−η) lost to respiration |
-| ζ | `ζ` | 0.2 | — | Insulation **splitting fraction** on the F_n tendency. Dimensionless, NOT a rate. Clamped to ≤ 1 after the Arrhenius factor (`reactions.jl:115`) |
+| ζ | `ζ` | 0.2 | — | Insulation **splitting fraction** on the F_n tendency: the share of settling fungal carbon that lands insulated rather than non-insulated. Dimensionless, NOT a rate, and **not temperature-scaled** (2026-07-30) |
 | λ | `λ` | 0.05 | — | Reduced uptake fraction for insulated hyphae (λ ≪ 1) |
 | D_Fn0 | `D_Fn0` | 0.01 | mm²/day | Hyphal extension diffusivity at T_ref |
 | D_Fm0 | `D_Fm0` | 1.0 | mm²/day | Translocation at T_ref. No tortuosity, but **network-dependent** — scaled by (F_n+F_i)/(F_n+F_i+K_Fm_net) |
@@ -1451,7 +1451,66 @@ precursor. It is kept because it computes CO₂ independently and the stiff solv
 structurally cannot, so it carries test 2 — and because two independent
 implementations over shared physics are the only convergence evidence this model
 has. Once test 1 exists, test 2 becomes a redundancy rather than the only line
-of defence.
+of defence. The 2026-07-30 measurement below is what that convergence evidence
+currently amounts to.
+
+### Measured agreement — 2026-07-30
+
+`paper/de_gryze/verify_solver_agreement.jl`, soil 3, D = 1.175 mm, n = 200,
+22 days, `degryze_config.jl` as of this date. **The claim in this section is only
+as current as the last run of that script.** Re-run it after any change to the
+source terms or the discretisation, and after any parameter change that alters
+stiffness — the previous evidence went stale because it was measured at
+`k_L = 1000` against the current 25000, which is the parameter that moves DOC.
+
+Maximum relative difference at day 22, split against stiff:
+
+| | C | B | F_n | F_m | F_i | E | M | O | P | CO₂ | r_agg |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| split `dt_min` 1e-4 | 3.2e-2 | 2.9e-2 | 9.0e-3 | 4.2e-2 | 1.8e-2 | 6.5e-3 | 2.0e-3 | 3.4e-4 | 6.4e-5 | 2.2e-4 | 3.6e-3 |
+| split `dt_min` 1e-5 | 3.6e-3 | 3.3e-3 | 6.6e-4 | 3.3e-3 | 1.3e-3 | 5.3e-4 | 3.0e-4 | 1.6e-4 | 4.5e-5 | 2.5e-4 | 2.2e-4 |
+
+**Three readings, in order of what they license.**
+
+1. **The split solver's production floor is not converged.** Refining `dt_min`
+   by 10× shrank all eight field gaps, by a median factor of 9. Any comparison
+   between the solvers made at `dt_min = 1e-4` — including every earlier one —
+   *understates* the agreement.
+2. **The residual is first order in Δt**, which is the documented one-step lag in
+   θ and the effective diffusivities (§20a), not a defect. A 10× refinement
+   buying a ~10× reduction is what a lagged coefficient gives; a bug would not
+   scale with the step.
+3. **The split solver converges toward the stiff answer.** That is what licenses
+   treating the stiff result as the trusted one. Movement alone would not: the
+   gaps had to *shrink*, and they did, on every field.
+
+**What it does not establish.** Two discretisations converging on each other is a
+consistency result, not a verification against an analytic solution. Neither
+solver is validated here; they are shown to describe the same model.
+
+**Where the disagreement lives.** In the fast interior pools — F_m and C worst —
+not in the reported quantities. At the production floor `r_agg`, which feeds MWD,
+agrees to 3.6e-3, CO₂ to 2.2e-4 and POM to 6.4e-5. A single worst-field number
+would have hidden that, so the script now reports the observables separately.
+
+Wall clock on that run, both warm: stiff 2.1 s, split 18.2 s — **8.7×**, against
+the 24× measured at 45 days. Not a discrepancy: it is the scaling in §20a showing
+up, the split solver's cost per simulated day growing while the stiff solver's
+falls, so the ratio widens with horizon. 186,014 split steps for 22 days against
+391,773 for 45 says the same thing.
+
+**Split-solver carbon balance, same run: −2.7e-13** over 186,014 steps. Test 2
+above passes, so the disagreement is a resolution artefact in one integrator and
+not carbon going missing in either.
+
+*Two defects in the first version of that script, fixed 07-30 and worth recording
+because both produced confident output:* it had no warm-up, so the reported
+timings were dominated by compilation and it printed a 1.6× speedup where the
+documented figure is 24×; and its verdict tested the *magnitude* of the movement
+on refinement without testing the *direction*, so it would have reported
+"under-resolved, trust stiff" even had the split answer moved away from stiff.
+The measured gaps above were unaffected — the defects were in the timing and in
+the reasoning, not in the comparison.
 
 ### Implementation note
 
@@ -1820,7 +1879,7 @@ conventions stale in six more places. All fixed:
 | `docs/GUIDE.md` reaction-step listing | `(net_i, net_n, trans_ni)` |
 | `docs/REFERENCE.md` §15 catalog | `fungal_transitions` documented as returning `(net_i, net_n, trans_ni)`; it returns `(immobil_i, immobil_n, Resp_F_conv)` |
 | `src/physics/initial_conditions.jl:344` | comment gave `S_Fn` with α/β swapped (the arithmetic beneath it used α_n's value under β_n's name, so the conclusion held) |
-| `paper/simulations/single_aggregate_physics/run_simulations.jl` | **live code**, read `trans.trans_i` / `trans.trans_n` / `trans.insulation` — fields that have not existed since February. Would throw on first use |
+| `paper/_archive/simulations_20260729/single_aggregate_physics/run_simulations.jl` | read `trans.trans_i` / `trans.trans_n` / `trans.insulation` — fields that have not existed since February; would throw on first use. Archived 2026-07-29 unrepaired, so this is history, not a live defect |
 
 ### Erratum 9 — a modelling choice encoded as a test *(2026-07-28)*
 
@@ -1854,7 +1913,7 @@ implementation had drifted from `compute_source_terms` in three places:
 |---|---|---|
 | `O_aq` | `O·θ/(θ + K_H·θ_a)` (:205, :309) | `O` (:77) — state.O is already aqueous |
 | `C_aq` | `C/(1 + k_d·ρ_b)` (:54) | `C/(θ + ρ_b·k_d_eq)` (:75) |
-| `ζ_T` | `ζ·f_fun`, unclamped (:227) | `min(ζ·f_fun, 1.0)` (:115) |
+| ~~`ζ_T`~~ | *resolved 2026-07-30 — ζ is not temperature-scaled in either path* | |
 
 The O₂ one is the consequential one: with `K_H ≈ 34` and θ ≈ 0.4 the factor is
 ≈ 0.11, so reported respiration and CUE were evaluated at roughly a tenth of the
@@ -1957,49 +2016,55 @@ texture formula as definitional while the code it documented used the field).
 
 ---
 
-### Erratum 13 — ω: four open questions between the drafts *(2026-07-29)*
+### Erratum 13 — ω: CLOSED. The convention was settled in the SI; this file was not updated *(opened 2026-07-29, closed 2026-07-30)*
 
-Not an erratum in the sense of the others — nothing here is settled and nothing
-is being corrected. It records where two working drafts and the code disagree
-about the overlap correction, so the disagreements are not rediscovered.
+**The ω convention is not an open question and has not been one.** It is settled
+in `SI_tessellation.tex` (Overleaf): S4 defines `f_p`, `f_m` and
+`ω = (f_m/f_p)³` and accepts overlap as the design; S5 gives the dilution rule
+with the POM mass exempt; S6 proves the population total exact for diffusion and
+for reactions linear in the diluted variables, and derives the Monod error as
+`1/ω` in the linear regime and zero in the saturated one; S7 bounds it; **S8 is
+the normative implementation table and the code matches it row for row.** The
+manuscript closes the companion question — the two scalings entering the binder —
+as the fifth property of `r_agg`, with the residual carried by the fitted `κ_b`.
 
-`SI_tessellation.tex` (Overleaf) has the fullest treatment: it derives `f_p`,
-`f_m`, `ω = (f_m/f_p)³` and the `C_bg/ω` dilution, proves exactness for
-diffusion and linear reactions, identifies the Monod nonlinearity, bounds the
-error by `1/ω`, and gives an implementation table. **The code matches that
-table.** The two proofs stand on their own — they do not depend on which
-document is senior.
+**What actually went wrong.** On 2026-07-29 an independent trace reached the same
+Monod result and then raised four objections, which were written here and into
+the audit as "four open questions". Three were not objections to the convention:
 
-An independent trace on 2026-07-29 reached the same Monod result by another
-route, which is corroboration, and then raised four things the SI does not
-settle.
+1. **Oxygen.** S6 writes `O/ω` inside the illustrative Γ′, and the code does not
+   dilute O₂ (`create_initial_state`: "O₂ is NOT diluted — it is a boundary
+   condition, not a carbon pool"). The code is right. O₂ is supplied at the outer
+   boundary and is not an apportioned inventory, so there is nothing to divide;
+   S8, which is the normative table, lists only the background-carbon
+   concentration and the POM mass and says nothing about O₂. **Residual: one loose
+   factor in S6's illustration, not a physics decision.**
+2. **`C_bg ≈ 0`.** S7 rests its case on "the native POM was removed, so background
+   carbon is negligible", while `degryze_ic` initialises the full measured SOC.
+   Both are true and not in conflict: what S7's argument needs is the *soluble*
+   background, and the partition puts almost all of the SOC into MAOC. Soil 3
+   reports `C = 0.344` µg/mm³ against `M = 28.66`, regime `mineral_limited`.
+   **Residual: S7's sentence should name the soluble pool and quote the number,
+   which the run prints, instead of asserting that all background carbon is
+   negligible.**
+3. **Terms not yet analysed.** The other nonlinear terms — the
+   Langmuir–Freundlich isotherm, the sigmoid thresholds, the space-limited
+   yields, the POM-dissolution Monods, `K_Fm_net`, `ε_F` in `Π` — fall under the
+   same `1/ω` bound by the same argument. **Residual: drafting, not a defect.**
 
-**1. Is oxygen diluted?** The SI's error analysis writes
-`(O/ω)/(L_B + O/ω)` — it dilutes O₂. The code does not
-(`create_initial_state`, Step 8: "O₂ is NOT diluted — it is a boundary
-condition"). So `S_O = -α_O·Resp/capacity` divides a respiration built from
-diluted carbon by an undiluted oxygen capacity. Measured on soil 3, the O₂ sink
-is ~45× weaker than the physical one and `monod_O` never leaves 0.87, so
-near-POM anoxia does not form. **A physics decision, not a bug report:** O₂ is a
-boundary condition supplied from the headspace, which is an argument for leaving
-it undiluted — but then the sink term and the source term are on different
-scales. Unresolved.
+The fourth was real and is the only one that touched a document: the main text
+invoked ω and cited the Initial Condition section for it, and that section did not
+define ω or mention the overlap. Fixed 2026-07-30 — the section now states the
+apportionment, the exemptions (residue mass, oxygen) and the bound, and points to
+the Supplement for the proof.
 
-**2. Does the validity argument survive the configuration?** SI S7 rests the
-case on background carbon being negligible: "the native POM was removed, so
-`C_bg ≈ 0`". `degryze_ic` initialises the full measured SOC — 2.14 % for soil 3,
-`SOC_vol = 29.3` µg/mm³, partitioned across DOC, biomass, EPS and MAOC. That is
-not trace seeding. The `1/ω` bound is unaffected; the argument that the bound
-does not matter is. Either the argument needs revising or the configuration
-does.
-
-**3. Terms not yet analysed.** The SI treats the Monod form only. Also nonlinear
-in a diluted state against an undiluted constant: the Langmuir–Freundlich
-isotherm (`1/k_L`, `M_max`), the sigmoid thresholds (`B_min`, `E_min`,
-`F_i_min` — widths of `X_min/50`, effectively switches), the space-limited
-yields (`B_S`, `F_S`), the POM-dissolution Monods (`K_B_P`, `K_F_P`), the
-translocation network factor (`K_Fm_net`) and `ε_F` inside `Π`. Drafting work,
-not a defect.
+**The lesson, which is the reason this entry is kept rather than deleted.** The
+convention was settled in the SI and the manuscript, and this file and the audit
+went on saying "unresolved" for a day because neither was updated when the
+manuscript was. Then the audit text was read back as if it were evidence. That is
+the third time in one session that a stale internal note was reported as a live
+finding — see also the Van Genuchten and Langmuir–Freundlich entries in AUDIT §B.
+**Check the source, not the note.**
 
 The binder against `G_c` is a separate case and is **not** a missing `1/ω`: the
 binder is a sum of a diluted background contribution and an undiluted
@@ -2020,8 +2085,10 @@ Also: the SI's worked example tabulates `ρ_POM = 100` µg-C/mm³ (`f_p = 2.55`,
 **The overlap itself is not in question.** It is required — the model will be
 run on annual root input and field scenarios where model volume necessarily
 exceeds physical volume — and explicit domain coupling would need packing detail
-the model does not carry. The open question is where the `1/ω` is applied. See
-`docs/AUDIT.md`.
+the model does not carry. **Nor is the placement of the `1/ω` in question:** it is
+applied once, to the background pools at initialisation, and *not* again at the
+summation stage, because dilution and volume-inflation cancel there. A second
+factor would double-correct. The manuscript appendix proves it.
 
 ---
 
@@ -2081,7 +2148,7 @@ limitation for intact soils), and `test_api.jl`, which asserts mass balance,
 ---
 
 Historical documents that *quote* the old form were left alone on purpose:
-`docs/STRUCTURAL_AUDIT_2026-07-27.md`, `dev_notes/falconer_questions.md`
+`docs/_archive/STRUCTURAL_AUDIT_2026-07-27.md`, `dev_notes/falconer_questions.md`
 (the brief describes what we had when we asked), `docs/julia_falconer_deviations.md`
 and everything under `dev_notes/archive/`.
 

@@ -55,7 +55,7 @@ function aqueous_concentrations(record::OutputRecord, grid::GridInfo,
     # Matches reactions.jl:75 exactly: C_aq = C / (θ + ρ_b·k_d_eq).
     # Compute at each node
     for i in 1:n
-        C_aq[i] = record.state.C[i] / (θ[i] + soil.ρ_b * soil.k_d_eq)
+        C_aq[i] = C_aqueous(record.state.C[i], θ[i], soil)
         O_aq[i] = record.state.O[i]  # state.O is already C_aq since the O_total→C_aq switch
     end
 
@@ -110,7 +110,7 @@ function maoc_equilibrium(record::OutputRecord, grid::GridInfo,
     # Compute equilibrium MAOC at each node
     for i in 1:n
         C_eq = soil.k_d_eq * C_aq[i]
-        M_eq[i] = M_eq_langmuir_freundlich(C_eq, soil.M_max, soil.k_L, soil.n_LF)
+        M_eq[i] = M_eq_langmuir_freundlich(C_eq, maoc_capacity(soil), soil.k_L, soil.n_LF)
     end
 
     return M_eq
@@ -186,11 +186,11 @@ function respiration_rates(record::OutputRecord, grid::GridInfo,
 
         # `SourceTerms` carries only Resp_total, so the three components are
         # recomputed here from the same functions the solver calls, with the
-        # same C_aq / O_aq / ζ_T definitions. `test_postprocessing.jl` asserts
+        # same C_aq / O_aq / ζ definitions. `test_postprocessing.jl` asserts
         # the sum against `compute_source_terms(...).Resp_total` — if that
         # assertion fails, this block has drifted from reactions.jl.
         # Compute C_aq, O_aq
-        C_aq = C / (θ[i] + soil.ρ_b * soil.k_d_eq)
+        C_aq = C_aqueous(C, θ[i], soil)
         # state.O IS the aqueous concentration (O_total -> C_aq switch);
         # reactions.jl:77 is `O_aq = O`. Post-processing MUST use the same
         # definition or it reports rates the solver never used.
@@ -216,10 +216,9 @@ function respiration_rates(record::OutputRecord, grid::GridInfo,
         α_n_T = bio.α_n * f_T.f_fun
         β_i_T = bio.β_i * f_T.f_fun
         β_n_T = bio.β_n * f_T.f_fun
-        ζ_T = min(bio.ζ * f_T.f_fun, 1.0)   # clamped, as reactions.jl:115
         Π_val = Pi_protected(F_m, F_i, F_n, bio.ε_F)
         trans = fungal_transitions(F_i, F_n, F_m, Π_val, α_i_T, α_n_T, β_i_T, β_n_T,
-                                   ζ_T, bio.delta, bio.η_conv, bio.ε_F)
+                                   bio.ζ, bio.delta, bio.η_conv, bio.ε_F)
 
         # Store results
         Resp_B_vec[i] = Resp_B_val
@@ -297,7 +296,7 @@ function carbon_use_efficiency(record::OutputRecord, grid::GridInfo,
         O = record.state.O[i]
 
         # Compute C_aq, O_aq
-        C_aq = C / (θ[i] + soil.ρ_b * soil.k_d_eq)
+        C_aq = C_aqueous(C, θ[i], soil)
         # state.O IS the aqueous concentration (O_total -> C_aq switch);
         # reactions.jl:77 is `O_aq = O`. Post-processing MUST use the same
         # definition or it reports rates the solver never used.

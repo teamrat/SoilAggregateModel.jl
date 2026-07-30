@@ -28,34 +28,63 @@ Each POM particle of diameter `d` owns a cell of diameter `f_pack·d`, where
     φ_POM  = I_input · ρ_b / ρ_POM          POM volume fraction of bulk soil
     f_pack = (1/φ_POM)^(1/3)                cell diameter / POM diameter
 
-The model domain extends to `f_domain·d`, which must be at least `f_domain_min`
-for the radial grid to resolve the near-POM gradients. When `f_domain > f_pack`
-the domains of neighbouring particles overlap, and each one contains more than
-its share of the surrounding soil. The overlap factor is the volume ratio:
+The model domain extends to `f_domain·d`. **It must equal `f_pack·d`**, which
+is the equivalent-sphere radius of the particle's own Voronoi cell. Zero flux at
+that boundary is the correct symmetry condition between neighbouring particles,
+and it makes
 
-    ω = (f_domain / f_pack)³
+    ω = (f_domain / f_pack)³ = 1
 
-# The ω convention
+# Why ω must be 1
 
-Background carbon is divided by `ω` at initialization
-(`create_initial_state`): DOC, bacteria, all three fungal pools, EPS and MAOC.
-Each domain then carries exactly its proportionate share of the soil's own
-carbon despite being oversized.
+`ω > 1` means the domain encloses more soil than the particle owns, and the
+convention then divides background carbon (DOC, bacteria, all three fungal
+pools, EPS, MAOC) by `ω` so that summing over particles gives the right
+per-litre total.
 
-**POM is NOT divided by ω**, because it is a lumped scalar at the domain centre
-rather than carbon spread through the surrounding soil. One particle is one
-particle regardless of how much soil the domain reaches around it.
+**That is only valid for terms linear in concentration.** Every saturating term
+in the model compares a state variable against a fixed concentration — `K_B`,
+`K_F`, `C_B`, `B_S`, `F_S`, `B_min`, `F_i_min`, `E_min`, `K_E`, `K_B_P`,
+`K_F_P`, `K_Fm_net`, `1/k_L`, `M_max`, `1/ω_E` — and none of those was divided.
+Traced at ω = 30.3 on De Gryze soil 3 (REFERENCE.md §26 erratum 13): the O₂ sink
+was 45× too weak, so near-POM anoxia never formed; the MAOC equilibrium left 17×
+too little DOC; POM dissolution ran 1.75× too slow; bacterial maintenance and
+mortality were 6.4× too low with `B` parked at 0.97·`B_min`; fungal yield was
+2.35× too high and fungal respiration 44 % too low.
 
-The same asymmetry applies downstream: `Σ nᵢ·CO₂ᵢ` and `Σ nᵢ·P₀ᵢ` are already
-per-unit-soil totals and must not be divided by `ω` again. Aggregate volume
-fractions are likewise built from physical diameters and physical particle
-counts, so they carry no `ω` either.
+There is exactly one rescaling of constants that restores invariance — divide
+every constant with units of carbon concentration by `ω` and multiply every
+constant with units of inverse concentration by `ω`. That is a change of the
+unit of carbon mass, not a modelling choice, and **it is blocked by POM**: the C
+equation needs `R_P_max/ω` while the P equation needs `R_P_max` unchanged, and
+reconciling them would require diluting `P_0`, which is precisely what makes the
+amendment inventory correct. The two demands are irreconcilable, so no choice of
+constants makes the oversized domain consistent.
+
+**Overlap is the intended design.** The default is `f_domain_min = 10`, so
+`ω ≈ 30`. `domain_tessellation` records the geometry with an `@info` rather than a warning — the configuration is deliberate. What remains
+settled: the oversized domain is kept, because the outer boundary must stay clear
+of the near-POM gradients — shrinking it to `f_pack` puts a zero-flux surface
+1.5 mm from a DOC front that travels 3.2 mm — and the `1/ω` is applied once, to
+the background pools at initialisation. It is NOT applied again at the summation
+stage: dilution and volume-inflation already cancel there, so a second factor
+would double-correct. Manuscript Appendix (Domain Tessellation and Overlap
+Correction) has the derivation and the proof; REFERENCE.md §26 erratum 13 records
+how this was briefly and wrongly reopened.
+
+# The resolution argument was backwards
+
+`f_domain_min = 10.0` was justified as needed "to resolve the near-POM
+gradients". The grid is uniform, `h = (r_max − r_0)/(n − 1)`, so at fixed
+`n_grid` a **smaller** domain is finer. For d = 1.325 mm at n = 200:
+`f_domain = 10` gives h = 0.0300 mm; `f_domain = f_pack = 3.21` gives
+h = 0.0074 mm — 4× finer, on the correct domain.
 
 # Arguments
 - `ρ_POM`: POM carbon density [µg-C/mm³]
 - `I_input`: amendment rate [µg-C per µg-soil, dimensionless]
 - `ρ_b`: soil bulk density [µg/mm³]
-- `f_domain_min`: minimum domain factor for numerical resolution [-]
+- `f_domain_min`: floor on the domain factor [-]. Default 10; see the ω note above.
 
 # Returns
 NamedTuple `(φ_POM, f_pack, f_domain, ω)`.
@@ -64,7 +93,7 @@ NamedTuple `(φ_POM, f_pack, f_domain, ω)`.
 ```julia
 # De Gryze 2006: 1.5 g wheat stems (44.3 % C) per 150 g soil
 tess = domain_tessellation(ρ_POM = 200.0, I_input = 4.43e-3, ρ_b = 1300.0)
-tess.ω        # 28.8
+tess.ω        # 28.8  (overlap factor; background pools start at 1/ω)
 tess.f_domain # 10.0
 ```
 """
@@ -83,6 +112,18 @@ function domain_tessellation(; ρ_POM::Real, I_input::Real, ρ_b::Real,
     f_pack   = (1.0 / φ_POM)^(1/3)
     f_domain = max(f_pack, f_domain_min)
     ω        = (f_domain / f_pack)^3
+
+    # Recorded, not warned about: an overlapping domain is the
+    # intended design (field scenarios with repeated input need model volume to
+    # exceed physical volume), so a standing @warn on the chosen configuration
+    # would be wallpaper. What is worth seeing is the actual geometry, because a
+    # run at an unintended ω is otherwise invisible. The consistency question ω
+    # raises — the state is diluted, the concentration constants are not — is
+    # bounded by 1/ω; see REFERENCE.md §26 erratum 13.
+    ω > 1.0 + 1e-12 && @info(
+        "domain_tessellation: overlapping domains, ω = $(round(ω, digits=2)). " *
+        "Background carbon is diluted by ω; see REFERENCE.md §26 erratum 13.",
+        f_pack, f_domain, ω)
 
     (φ_POM = φ_POM, f_pack = f_pack, f_domain = f_domain, ω = ω)
 end

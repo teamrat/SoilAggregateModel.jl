@@ -2,7 +2,7 @@
 
 **Last Updated**: 2026-02-06  
 **Audience**: Users and developers of the Julia v2 implementation  
-**Companion documents**: REFERENCE.md (quick lookup), ARCHITECTURE_CLAUDE_CODE.md (solver design)
+**Companion documents**: `docs/REFERENCE.md` (quick lookup), `docs/ARCHITECTURE.md` (solver design — stale, see `docs/BACKLOG.md` item 12)
 
 ---
 
@@ -194,7 +194,19 @@ $$J_M = \kappa_s(T) \cdot \varphi_\varepsilon(M_{eq} - M) \;-\; \kappa_d(T) \cdo
 
 POM dissolution is enzymatic, driven by microbial activity at the POM surface. The flux density at r = r₀:
 
-$$J_P = R_P^{\max}(T) \cdot \frac{P}{P_0} \cdot \frac{B_0}{K_{B,P}+B_0} \cdot \frac{F_{n,0}}{K_{F,P}+F_{n,0}} \cdot \frac{\theta_0}{\theta_P+\theta_0} \cdot \frac{O_{aq,0}}{L_P+O_{aq,0}}$$
+$$J_P = R_P^{\max}(T) \cdot \frac{P}{P_0} \cdot \tfrac{1}{2}\left(\frac{B_0}{K_{B,P}+B_0} + \frac{F_{n,0}}{K_{F,P}+F_{n,0}}\right) \cdot \frac{\theta_0}{\theta_P+\theta_0} \cdot \frac{O_{aq,0}}{L_P+O_{aq,0}}$$
+
+**Additive, not multiplicative.** The two microbial terms are averaged, not
+multiplied. Depolymerisation is extracellular and acts on the substrate, so
+enzymes from either community suffice: at saturating biomass of one community
+alone the rate is half maximal, and both at saturation recover the full rate. A
+product form would assert that POM cannot be depolymerised without both
+populations present, which is false — white-rot fungi mineralise lignin without
+bacteria, and cellulolytic bacteria act without fungi. The equal weighting is a
+stated default and is calibratable; the additive *form* is not. Matches
+`manuscript-4-5.tex` Eq.~(\ref{eq:R_P}) and
+`src/carbon/pom_dissolution.jl:36-38`.
+
 
 J_P [μg-C/mm²/day] is the surface-specific rate. The total rate R_P = 4πr₀²·J_P [μg-C/day] is what appears in dP/dt = −R_P.
 

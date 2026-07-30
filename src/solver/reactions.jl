@@ -84,7 +84,7 @@ function compute_source_terms(C::Real, B::Real, F_n::Real, F_m::Real, F_i::Real,
                               bio::BiologicalProperties, soil::SoilProperties,
                               temp_cache::TemperatureCache)
     # === STEP 1: Compute C_aq, C_eq, O_aq ONCE ===
-    C_aq = C / (θ + soil.ρ_b * soil.k_d_eq)
+    C_aq = C_aqueous(C, θ, soil)
     C_eq = soil.k_d_eq * C_aq
     O_aq = O    
 
@@ -121,10 +121,12 @@ function compute_source_terms(C::Real, B::Real, F_n::Real, F_m::Real, F_i::Real,
     α_n_T = bio.α_n * temp_cache.f_fun
     β_i_T = bio.β_i * temp_cache.f_fun
     β_n_T = bio.β_n * temp_cache.f_fun
-    # NOTE: ζ is a dimensionless SPLITTING FRACTION, not a rate, so scaling it
-    # by an Arrhenius factor is dimensionally wrong and can drive it above 1
-    # (which would flip the sign of immobil_n). Clamped until this is resolved.
-    ζ_T = min(bio.ζ * temp_cache.f_fun, 1.0)
+    # ζ is NOT temperature-scaled (decision 2026-07-30). It is a dimensionless
+    # splitting fraction — what share of settling fungal carbon lands insulated
+    # rather than non-insulated — and there is no credible reason for that share
+    # to rise with temperature. It was previously multiplied by f_fun like a
+    # rate, then clamped to 1 because the product could otherwise exceed 1 and
+    # flip the sign of immobil_n. Both the scaling and the clamp are gone.
 
     # Protection ratio
     Π_val = Pi_protected(F_m, F_i, F_n, bio.ε_F)
@@ -143,7 +145,7 @@ function compute_source_terms(C::Real, B::Real, F_n::Real, F_m::Real, F_i::Real,
 
     # Transitions (ζ splitting already applied inside fungal_transitions)
     trans = fungal_transitions(F_i, F_n, F_m, Π_val, α_i_T, α_n_T, β_i_T, β_n_T,
-                               ζ_T, bio.delta, bio.η_conv, bio.ε_F)
+                               bio.ζ, bio.delta, bio.η_conv, bio.ε_F)
 
     # Recycling (death)
     R_rec_F_val = R_rec_F(μ_F_T, F_i, bio.F_i_min)
@@ -161,7 +163,7 @@ function compute_source_terms(C::Real, B::Real, F_n::Real, F_m::Real, F_i::Real,
     # === STEP 5: MAOC terms ===
     κ_s_T = bio.κ_s_ref * temp_cache.f_maoc_s
     κ_d_T = bio.κ_d_ref * temp_cache.f_maoc_d
-    M_eq_val = M_eq_langmuir_freundlich(C_eq, soil.M_max, soil.k_L, soil.n_LF)
+    M_eq_val = M_eq_langmuir_freundlich(C_eq, maoc_capacity(soil), soil.k_L, soil.n_LF)
     J_M_val = J_M(M, M_eq_val, κ_s_T, κ_d_T, bio.ε_maoc)
 
     # === STEP 6: Total respiration ===
