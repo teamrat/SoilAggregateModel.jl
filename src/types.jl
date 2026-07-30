@@ -111,7 +111,7 @@ Create an AggregateState for `n` grid points, NaN-filled. Populate with
 `create_initial_state`, which assigns all eight pools plus `P`, `P_0` and
 `CO2_cumulative`.
 
-`P_0` must be positive before integrating; `run_simulation` throws otherwise.
+`P_0` must be positive before integrating; `run_aggregate_stiff` throws otherwise.
 """
 function AggregateState(n::Int)
     AggregateState(
@@ -133,72 +133,10 @@ end
 # Workspace (Pre-Allocated Arrays)
 #═══════════════════════════════════════════════════════════════════════════════
 
-"""
-    Workspace
-
-Pre-allocated workspace arrays. Zero allocations in the hot loop.
-
-Fields:
-- Tridiagonal system (reused for each of 5 diffusing species):
-  - `lower`: Lower diagonal [n-1]
-  - `diag`: Main diagonal [n]
-  - `upper`: Upper diagonal [n-1]
-  - `rhs`: Right-hand side / solution vector [n]
-
-- Spatially varying quantities (updated once per timestep):
-  - `θ`: Water content [-] [n]
-  - `θ_a`: Air-filled porosity [-] [n]
-  - `D_C`: Effective DOC diffusion [mm²/day] [n]
-  - `D_B`: Effective bacterial diffusion [mm²/day] [n]
-  - `D_Fn`: Effective non-insulated fungal diffusion [mm²/day] [n]
-  - `D_O`: Effective oxygen diffusion [mm²/day] [n]
-
-- Temperature cache:
-  - `f_T`: TemperatureCache struct
-
-Note: D_Fm (mobile fungi) is network-dependent, so it genuinely varies by node — see D_eff_fungi_mobile.
-"""
-struct Workspace
-    # Tridiagonal system (reused for each of 5 diffusing species)
-    lower::Vector{Float64}   # n-1
-    diag::Vector{Float64}    # n
-    upper::Vector{Float64}   # n-1
-    rhs::Vector{Float64}     # n
-
-    # Spatially varying quantities (updated once per timestep)
-    θ::Vector{Float64}       # n — water content
-    θ_a::Vector{Float64}     # n — air-filled porosity
-    D_C::Vector{Float64}     # n — effective C diffusion
-    D_B::Vector{Float64}     # n — effective B diffusion
-    D_Fn::Vector{Float64}    # n — effective F_n diffusion
-    D_Fm::Vector{Float64}    # n — effective F_m diffusion (network-dependent)
-    D_O::Vector{Float64}     # n — effective O diffusion
-
-    # Temperature cache
-    f_T::TemperatureCache
-end
-
-"""
-    Workspace(n::Int)
-
-Create a Workspace with pre-allocated arrays for `n` grid points, NaN-filled.
-"""
-function Workspace(n::Int)
-    Workspace(
-        fill(NaN, n-1),  # lower
-        fill(NaN, n),    # diag
-        fill(NaN, n-1),  # upper
-        fill(NaN, n),    # rhs
-        fill(NaN, n),    # θ
-        fill(NaN, n),    # θ_a
-        fill(NaN, n),    # D_C
-        fill(NaN, n),    # D_B
-        fill(NaN, n),    # D_Fn
-        fill(NaN, n),    # D_Fm
-        fill(NaN, n),    # D_O
-        TemperatureCache()             # f_T
-    )
-end
+# `Workspace` was archived with the split solver on 2026-07-30. It held the
+# pre-allocated per-step arrays that `timestepper.jl` reused; the stiff solver
+# allocates its coefficient vectors per RHS call at `eltype(u)` so forward-mode
+# AD can see them. See _archive/split_solver_20260730/.
 
 #═══════════════════════════════════════════════════════════════════════════════
 # Output

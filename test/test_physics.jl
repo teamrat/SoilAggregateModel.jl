@@ -2,12 +2,11 @@
 Tests for physics/*.jl modules
 """
 
-import SoilAggregateModel: TemperatureCache, AggregateState, Workspace,
+import SoilAggregateModel: TemperatureCache, AggregateState,
                            alpha_effective, van_genuchten, water_content, update_water_content!,
                            van_genuchten_inverse,
                            tortuosity_millington_quirk, D_eff_DOC, D_eff_bacteria,
-                           D_eff_fungi_noninsulated, D_eff_fungi_mobile, D_eff_oxygen,
-                           update_effective_diffusion!
+                           D_eff_fungi_noninsulated, D_eff_fungi_mobile, D_eff_oxygen
 
 @testset "Water retention" begin
     @testset "Alpha modification" begin
@@ -294,94 +293,9 @@ end
         @test D_O_dry > 0.0
     end
 
-    @testset "update_effective_diffusion!" begin
-        n = 50
-        ws = Workspace(n)
-        bio = BiologicalProperties()
-
-        # D_Fm is network-dependent, so the state must supply F_n and F_i
-        state = AggregateState(n)
-        state.F_n .= 10 * bio.K_Fm_net
-        state.F_i .= 10 * bio.K_Fm_net
-
-        # Set water content (varying)
-        ws.θ .= range(0.1, 0.4, length=n)
-        ws.θ_a .= soil.θ_s .- ws.θ
-
-        # Update diffusion coefficients
-        update_effective_diffusion!(ws, state, soil, bio, temp_cache)
-
-        # All should be positive
-        @test all(ws.D_C .> 0.0)
-        @test all(ws.D_B .> 0.0)
-        @test all(ws.D_Fn .> 0.0)
-        @test all(ws.D_O .> 0.0)
-
-        # D_Fm is now a per-node workspace array (network-dependent)
-        @test all(ws.D_Fm .> 0.0)
-
-        # D_B should be less than D_C (slower motility)
-        @test all(ws.D_B .< ws.D_C)
-
-        # Wetter nodes → higher aqueous diffusion
-        @test ws.D_C[end] > ws.D_C[1]
-        @test ws.D_Fn[end] > ws.D_Fn[1]
-    end
-end
-
-@testset "Physics integration" begin
-    @testset "Full workspace update sequence" begin
-        n = 100
-        soil = SoilProperties()
-        bio = BiologicalProperties()
-
-        # Create state with some EPS and fungi
-        state = AggregateState(n)
-        # Every pool this sequence reads must be set: pools are NaN-filled, and
-        # D_Fm reads F_n even though this testset is about water and diffusion.
-        state.C .= 0.0
-        state.B .= 0.0
-        state.F_n .= 0.0
-        state.F_m .= 0.0
-        state.O .= 0.0
-        state.M .= 0.0
-        state.E .= 5.0
-        state.F_i .= 2.0
-
-        # Create workspace
-        ws = Workspace(n)
-
-        # Simulate timestep update sequence
-        T = 293.15  # 20°C
-        ψ = -33.0   # Field capacity
-
-        # Step 1: Update temperature cache
-        # (Simplified - in real code this uses update_temperature_cache!)
-        ws.f_T.D_DOC_w = 0.864
-        ws.f_T.D_O2_w = 150.0
-        ws.f_T.D_O2_a = 1.73e6
-        ws.f_T.K_H_O = 29.0
-        ws.f_T.f_fun = 1.0
-
-        # Step 2: Update water content
-        update_water_content!(ws.θ, ws.θ_a, ψ, state, soil)
-
-        # Step 3: Update effective diffusion
-        update_effective_diffusion!(ws, state, soil, bio, ws.f_T)
-
-        # Verify everything is reasonable
-        @test all(soil.θ_r .<= ws.θ .<= soil.θ_s)
-        @test all(ws.D_C .> 0.0)
-        @test all(ws.D_B .> 0.0)
-        @test all(ws.D_Fn .> 0.0)
-        @test all(ws.D_O .> 0.0)
-
-        # Relationships
-        @test all(ws.D_B .< ws.D_C)  # Bacteria slower than DOC
-        # D_Fm moved to the workspace as a per-node array when it became
-        # network-dependent; TemperatureCache.D_Fm is now a dead field (NaN).
-        @test all(ws.D_Fm .> 0.0)     # Mobile fungi active
-    end
+    # The `update_effective_diffusion!` testset, and the "Physics integration"
+    # block that exercised the per-step Workspace update sequence, were archived
+    # 2026-07-30 with the split solver. See _archive/split_solver_20260730/.
 end
 
 @testset "Type stability" begin

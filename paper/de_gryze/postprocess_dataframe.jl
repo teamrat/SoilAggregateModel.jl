@@ -49,7 +49,7 @@ scripts never need to reimplement integration or normalization logic.
   `E_permille`, `M_permille`, `CO2_permille`
 
 # Arguments
-- `result::SimulationResult`: Output from `run_aggregate()`
+- `result::SimulationResult`: Output from `run_aggregate_stiff()`
 
 # Returns
 - `DataFrame`: One row per output time
@@ -62,7 +62,7 @@ scripts never need to reimplement integration or normalization logic.
 
 # Example
 ```julia
-result = run_aggregate(bio, soil, T, ψ, O2, (0.0, 60.0); output_times=0:1:60)
+result = run_aggregate_stiff(bio, soil, T, ψ, O2, (0.0, 60.0); output_times=0:1:60)
 df = result_to_dataframe(result)
 CSV.write("output.csv", df)
 
@@ -157,7 +157,7 @@ is convenient for faceted plotting and filtering in R or Python.
 - `CO2`: Cumulative CO₂ at this time [μg-C] (scalar, repeated)
 
 # Arguments
-- `result::SimulationResult`: Output from `run_aggregate()`
+- `result::SimulationResult`: Output from `run_aggregate_stiff()`
 - `times::Vector{<:Real}`: Times [days] at which to extract profiles.
   Each is matched to the nearest available output snapshot.
 
@@ -171,7 +171,7 @@ is convenient for faceted plotting and filtering in R or Python.
 
 # Example
 ```julia
-result = run_aggregate(bio, soil, T, ψ, O2, (0.0, 60.0))
+result = run_aggregate_stiff(bio, soil, T, ψ, O2, (0.0, 60.0))
 df_sp = spatial_snapshots(result; times=[0.0, 7.0, 14.0, 21.0, 60.0])
 CSV.write("spatial.csv", df_sp)
 
@@ -210,7 +210,7 @@ end
     run_diameter_sweep(diam_all, bio, soil, T_func, ψ_func, O2_func;
                        t_max, output_times, n_grid=200,
                        domain_factor=25.0, ρ_POM=50.0,
-                       dt_max=0.1, dt_min=1e-4) -> DataFrame
+                       ) -> DataFrame
 
 Run a population of single-aggregate simulations across multiple POM diameters.
 
@@ -236,8 +236,6 @@ into one long DataFrame with diameter metadata prepended as the leading columns.
 - `n_grid::Int`: Radial grid points per aggregate (default: 200)
 - `domain_factor::Real`: r_max = diam × domain_factor / 2 (default: 25.0)
 - `ρ_POM::Real`: POM carbon density [μg-C/mm³] (default: 50.0)
-- `dt_max::Real`: Maximum timestep [days] (default: 0.1)
-- `dt_min::Real`: Minimum timestep [days] (default: 1e-4)
 
 # Returns
 - `DataFrame`: All diameters concatenated, with leading columns:
@@ -265,16 +263,11 @@ function run_diameter_sweep(diam_all, bio, soil, T_func, ψ_func, O2_func;
                             t_max, output_times,
                             n_grid::Int=200, domain_factor::Real=25.0,
                             ρ_POM::Real=50.0,
-                            dt_max::Real=0.1, dt_min::Real=1e-4,
                             ic=nothing,
                             ω::Real=1.0,
                             snap_times::Vector{Float64}=Float64[],
-                            solver::Symbol=:stiff,
                             quiet::Bool=false,
                             output_dir::String="")
-
-    solver in (:stiff, :split) || throw(ArgumentError(
-        "solver must be :stiff (default) or :split (reference implementation), got $(solver)"))
 
     all_timeseries = DataFrame[]
     all_snapshots  = DataFrame[]
@@ -299,18 +292,10 @@ function run_diameter_sweep(diam_all, bio, soil, T_func, ψ_func, O2_func;
         # Run single-aggregate simulation. :stiff is the default workhorse;
         # :split is the reference implementation kept for cross-checking and
         # for its independent carbon-closure probe (REFERENCE.md §17a, §20a).
-        result = if solver === :stiff
-            run_aggregate_stiff(bio, soil, T_func, ψ_func, O2_func, (0.0, t_max);
-                                n_grid=n_grid, r_0=r_0, r_max=r_max,
-                                ic=ic, P_0=P_0, ω=ω,
-                                output_times=output_times)
-        else
-            run_aggregate(bio, soil, T_func, ψ_func, O2_func, (0.0, t_max);
-                          n_grid=n_grid, r_0=r_0, r_max=r_max,
-                          ic=ic, P_0=P_0, ω=ω,
-                          dt_max=dt_max, dt_min=dt_min,
-                          output_times=output_times)
-        end
+        result = run_aggregate_stiff(bio, soil, T_func, ψ_func, O2_func, (0.0, t_max);
+                                     n_grid=n_grid, r_0=r_0, r_max=r_max,
+                                     ic=ic, P_0=P_0, ω=ω,
+                                     output_times=output_times)
 
         elapsed = time() - elapsed_start
         n_steps = get(result.diagnostics, "n_accept", result.diagnostics["n_steps"])

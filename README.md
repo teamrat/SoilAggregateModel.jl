@@ -18,8 +18,8 @@ A mechanistic model of soil aggregate formation and carbon cycling. The model so
 **Performance target**: 400 aggregates × 1500 grid points × 10 years, with zero heap allocations in the hot loop.
 
 **Key features**:
-- Custom Crank-Nicolson solver with Thomas algorithm (O(n) per species)
-- Strang splitting (second-order operator splitting)
+- Method of lines + FBDF with sparse KLU factorisation (`run_aggregate_stiff`)
+- Reaction and transport coupled, not operator-split
 - Adaptive timestep control
 - Exact carbon conservation (< 10⁻¹² relative error)
 - Temperature-dependent rates via Arrhenius kinetics
@@ -57,7 +57,7 @@ T(t) = 293.15  # Temperature [K]
 O2(t) = 0.3    # Ambient O₂ [μg/mm³]
 
 # Run 30-day simulation
-result = run_aggregate(bio, soil, T, ψ, O2, (0.0, 30.0))
+result = run_aggregate_stiff(bio, soil, T, ψ, O2, (0.0, 30.0))
 
 # Access results
 for output in result.outputs
@@ -97,7 +97,7 @@ SoilAggregateModel.jl/
 │   ├── environment.jl        # EnvironmentalDrivers{FT,Fψ,FO}
 │   ├── result.jl             # SimulationResult, OutputRecord, GridInfo
 │   ├── math_utils.jl         # Shared numerical helpers
-│   ├── api.jl                # Public API (run_aggregate)
+│   ├── api.jl                # Public API (run_aggregate_stiff)
 │   │
 │   ├── temperature/
 │   │   ├── arrhenius.jl      # Arrhenius factor

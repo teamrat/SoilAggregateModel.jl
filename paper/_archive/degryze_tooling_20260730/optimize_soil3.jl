@@ -91,7 +91,6 @@ soil_mass_per_L = soil_V * ρ_bulk * 1e-6  # grams soil per liter
 # Soil 3: SOC = 2.21% (Table 1 in de Gryze)
 ic_soil3 = InitialConditions(
     SOC   = 0.0221,
-    s_M   = 0.6,
     f_bact  = 0.01,
     f_fungi = 0.01,
     f_eps   = 0.005,

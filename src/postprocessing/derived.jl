@@ -33,7 +33,7 @@ NamedTuple with:
 
 # Example
 ```julia
-result = run_aggregate(bio, soil, T, ψ, O2, (0.0, 30.0))
+result = run_aggregate_stiff(bio, soil, T, ψ, O2, (0.0, 30.0))
 aq = aqueous_concentrations(result.outputs[15], result.grid, result.params, result.env)
 plot(result.grid.r_grid, aq.C_aq, label="Aqueous DOC")
 ```
@@ -90,7 +90,7 @@ where C_eq = k_d·C_aq is the equilibrium sorbed concentration.
 
 # Example
 ```julia
-result = run_aggregate(bio, soil, T, ψ, O2, (0.0, 30.0))
+result = run_aggregate_stiff(bio, soil, T, ψ, O2, (0.0, 30.0))
 M_eq = maoc_equilibrium(result.outputs[15], result.grid, result.params, result.env)
 plot(result.grid.r_grid, [M_eq, result.outputs[15].state.M], label=["M_eq" "M_actual"])
 ```
@@ -148,7 +148,7 @@ NamedTuple with:
 
 # Example
 ```julia
-result = run_aggregate(bio, soil, T, ψ, O2, (0.0, 30.0))
+result = run_aggregate_stiff(bio, soil, T, ψ, O2, (0.0, 30.0))
 resp = respiration_rates(result.outputs[15], result.grid, result.params, result.env)
 plot(result.grid.r_grid, resp.Resp_total, label="Total respiration")
 ```
@@ -263,7 +263,7 @@ NamedTuple with:
 
 # Example
 ```julia
-result = run_aggregate(bio, soil, T, ψ, O2, (0.0, 30.0))
+result = run_aggregate_stiff(bio, soil, T, ψ, O2, (0.0, 30.0))
 cue = carbon_use_efficiency(result.outputs[15], result.grid, result.params, result.env)
 plot(result.grid.r_grid, [cue.CUE_B, cue.CUE_F], label=["Bacteria" "Fungi"])
 ```
@@ -357,7 +357,7 @@ Computed using backward finite difference:
 
 # Example
 ```julia
-result = run_aggregate(bio, soil, T, ψ, O2, (0.0, 30.0))
+result = run_aggregate_stiff(bio, soil, T, ψ, O2, (0.0, 30.0))
 flux = co2_flux(result)
 plot([result.outputs[i].t for i in 1:length(result.outputs)], flux)
 ```

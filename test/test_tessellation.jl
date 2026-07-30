@@ -32,20 +32,22 @@ using Test
         @test t.ω ≈ (t.f_domain / t.f_pack)^3
     end
 
-    @testset "ω is exactly 1 when packing already exceeds the minimum" begin
-        # Sparse amendment: f_pack = 32.6 > f_domain_min, so domains do not
-        # overlap and no correction may be applied.
-        t = domain_tessellation(ρ_POM=200.0, I_input=4.43e-6, ρ_b=1300.0)
-        @test t.f_pack > 10.0
-        @test t.f_domain == t.f_pack
-        @test t.ω == 1.0            # exact, not approximate
+    @testset "ω > 1 is recorded, not warned about" begin
+        # Overlap is the intended design, so this is @info, not @warn — a
+        # standing warning on the chosen configuration is wallpaper. The tripwire
+        # is that the geometry gets logged at all: a run at an unintended ω would
+        # otherwise be invisible. The consistency question ω raises is
+        # REFERENCE.md §26 erratum 13.
+        @test_logs (:info,) match_mode=:any domain_tessellation(
+                ρ_POM=200.0, I_input=4.43e-3, ρ_b=1300.0)
     end
 
-    @testset "f_domain_min is honoured" begin
-        t = domain_tessellation(ρ_POM=200.0, I_input=4.43e-3, ρ_b=1300.0,
-                                f_domain_min=25.0)
-        @test t.f_domain == 25.0
-        @test t.ω ≈ (25.0 / t.f_pack)^3
+    @testset "ω is exactly 1 when the domain is not oversized" begin
+        for (I, kw) in ((4.43e-6, ()), (4.43e-3, (:f_domain_min => 0.0,)))
+            t = domain_tessellation(; ρ_POM=200.0, I_input=I, ρ_b=1300.0, kw...)
+            @test t.f_domain == t.f_pack
+            @test t.ω == 1.0            # exact, not approximate
+        end
     end
 
     @testset "pom_population — the amendment identity" begin

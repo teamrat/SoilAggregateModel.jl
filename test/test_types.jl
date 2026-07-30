@@ -2,7 +2,7 @@
 Tests for types.jl
 """
 
-import SoilAggregateModel: TemperatureCache, Workspace
+import SoilAggregateModel: TemperatureCache
 
 @testset "TemperatureCache" begin
     cache = TemperatureCache()
@@ -17,8 +17,12 @@ import SoilAggregateModel: TemperatureCache, Workspace
     @test isdefined(cache, :D_O2_w)
     @test isdefined(cache, :D_DOC_w)
     @test isdefined(cache, :D_O2_a)
-    @test isdefined(cache, :D_Fm)
     @test isdefined(cache, :K_H_O)
+
+    # NOT a field. It was written every step and read by nothing; F_m
+    # diffusivity is network-dependent and built per node in
+    # the RHS. mol_rhs! computes D_Fm per node at the current state.
+    @test !(:D_Fm in fieldnames(TemperatureCache))
 
     # Default constructor should initialize to NaN
     @test isnan(cache.f_bac)
@@ -91,38 +95,7 @@ end
     @test state.P == 500.0  # Original unchanged
 end
 
-@testset "Workspace" begin
-    n = 150
-    ws = Workspace(n)
-
-    # Tridiagonal arrays
-    # Same convention for the scratch arrays: a zero diffusivity is a
-    # physically meaningful value and would stop transport silently.
-    @test all(isnan, ws.θ)
-    @test all(isnan, ws.D_C)
-    @test all(isnan, ws.D_Fm)
-    @test all(isnan, ws.D_O)
-
-    @test length(ws.lower) == n - 1
-    @test length(ws.diag) == n
-    @test length(ws.upper) == n - 1
-    @test length(ws.rhs) == n
-
-    # Spatially varying quantities
-    @test length(ws.θ) == n
-    @test length(ws.θ_a) == n
-    @test length(ws.D_C) == n
-    @test length(ws.D_B) == n
-    @test length(ws.D_Fn) == n
-    @test length(ws.D_O) == n
-
-    # Temperature cache
-    @test ws.f_T isa TemperatureCache
-
-    # Workspace is immutable but contents are mutable
-    ws.θ[1] = 0.3
-    @test ws.θ[1] == 0.3
-end
+# Archived 2026-07-30 with the split solver; see _archive/split_solver_20260730/.
 
 @testset "OutputRecord" begin
     n = 100

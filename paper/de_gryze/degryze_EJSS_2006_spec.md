@@ -54,51 +54,111 @@ Each states what is measured, what is assumed, and what the assumption is *not*
 allowed to touch. Nothing here may be set by inverting an observable that the
 comparison then reports as agreement.
 
-### A1. Sand particle-size distribution — log-linear between 53 and 2000 µm
+### A1'. Sand particle-size distribution — inverted from the measured day-0 MWD
+
+*Replaced the log-linear assumption A1 on 2026-07-29. A1 is kept below as
+superseded, because the argument for dropping it is part of the result.*
 
 **Problem.** Eq. (1) needs mass in four classes. Silt+clay (Table 1) gives the
 <53 µm class directly. But sand spans *two* classes — 53–250 and 250–2000 µm —
-and the paper reports only the total. The weights differ by 1125 − 151.5 = 973.5
+and the paper reports only the total. The weights differ by 1125 - 151.5 = 973.5
 µm, so at 44 % sand the unknown split swings MWD by ±428 µm, comparable to the
 entire day-0 signal.
 
-**Assumption.** Cumulative sand mass is linear in log(diameter) across the
-53–2000 µm span, i.e. equal mass per log interval:
+**What is done now.** At day 0 the sample is primary particles plus unaggregated
+residue, and all residue is 0.5-2.0 mm, hence in class B. Writing `p` for the
+residue mass fraction (= `I_input/f_C_POM` = 0.01) and `w` for the eq. (1)
+nominals,
 
 ```
-f(53–250)   = ln(250/53) / ln(2000/53) = 0.4272
-f(250–2000) = 1 − 0.4272                = 0.5728
+MWD(0) = (1 - p)·[w_D·(silt+clay) + w_C·s·(1-x) + w_B·s·x]  +  p·w_B
 ```
 
-Applied to each soil's measured sand percentage. **This is a statement about
-particle size distributions, made without reference to any measured MWD.**
+linear in `x`, inverted per soil in `degryze_soils.jl :: sand_coarse_fraction`.
+
+| soil | sand % | day-0 MWD | `x` = sand in 250-2000 | A1 said |
+|---|---|---|---|---|
+| 1 | 53 | 452 | 0.683 | 0.573 |
+| 2 | 33 | 240 | 0.508 | 0.573 |
+| 3 | 44 | 199 | **0.253** | 0.573 |
+| 4 | 44 | 406 | 0.741 | 0.573 |
+| 5 | 21 | 358 | **1.455 — impossible** | 0.573 |
+
+**This is not fitting the model.** No biological parameter reaches day 0; the
+aggregation machinery has not run; one measurement per soil determines one
+unknown per soil. Net degrees of freedom in the fit: zero. What it does is
+replace a guess about a distribution the paper never reports with the one
+measurement that observes that distribution directly.
+
+**It assumes A1b.** A miss cannot otherwise be attributed between the sand split
+and day-0 aggregation, so the inversion charges everything to the split. A1b is
+known false in general (see below), and the inversion does not hide that — a
+soil carrying day-0 aggregates demands `x > 1`, which `sand_coarse_fraction`
+refuses with an error rather than clamping.
+
+**Soil 5 is that case.** 21 % sand, all of it coarse, gives 266 µm including the
+residue against 358 measured. No sand split reaches it. Mass must already sit in
+the >2 mm class at day 0, so water-stable aggregates survived the pretreatment.
+`x = 0.9` is set by hand for soil 5 and the residual, **-112 µm**, is carried and
+reported. It is a stated mismatch, not an absorbed one.
+
+**What the numbers say about A1.** Soils 2 and 3 come out well below 0.573 —
+0.508 and 0.253. That direction is established independently of A1b: aggregation
+can only add mass to coarse classes, so measured MWD below A1's prediction means
+A1 gave those soils too much coarse sand. Soil 3 needs less than half of it. And
+the five values span 0.25 to >1, so no single sand-shape rule fits five soils
+from one meadow — A1's premise, not merely its constant, was wrong.
+
+---
+
+### A1 (SUPERSEDED). Sand particle-size distribution — log-linear
+
+**Assumption.** Cumulative sand mass linear in log(diameter) across the 53-2000
+µm span, i.e. equal mass per log interval:
+
+```
+f(53-250)   = ln(250/53) / ln(2000/53) = 0.4272
+f(250-2000) = 1 - 0.4272                = 0.5728
+```
+
+Applied to each soil's measured sand percentage. **This was a statement about
+particle size distributions, made without reference to any measured MWD** — that
+independence was its whole merit, and it is what A1' gives up in exchange for
+using the measurement.
 
 **A1 describes DISPERSED soil.** Texture in Table 1 is measured after chemical
 dispersion; it is the primary-particle distribution. MWD is measured by wet
 sieving of UNDISPERSED soil, where primary particles may be bound together.
 These are two different material states and A1 alone cannot predict the second.
+A1' inherits this problem: the inversion produces the undispersed class
+distribution directly, which is the right target, but it can no longer be
+checked against Table 1 independently.
 
 ### A1b. No aggregation at day 0 — known to be false
 
-To turn A1 into a day-0 prediction, a second assumption is required: that the
-reconstituted soil contains no water-stable aggregates, so the wet-sieve classes
-are populated by primary particles only.
+To turn a sand split into a day-0 prediction, a second assumption is required:
+that the reconstituted soil contains no water-stable aggregates, so the wet-sieve
+classes are populated by primary particles only.
 
 **This is wrong.** The 5-minute submersion and sieving act on undispersed
 material, and re-aggregation on wetting is not prevented by the pretreatment.
-It is adopted because nothing in the paper constrains day-0 aggregate content —
-only MWD is reported, never the size distribution — and because it is applied
-uniformly to all five soils, so it biases them in the same direction rather than
-selectively.
+Soil 5 proves it outright: its day-0 MWD exceeds what its texture can produce.
+
+It is adopted for the other four soils because nothing in the paper constrains
+day-0 aggregate content — only MWD is reported, never the size distribution.
+Under A1' the cost is explicit: whatever day-0 aggregation those soils carry is
+charged to their sand split instead.
 
 A related consequence: **the <53 µm class equals silt+clay only in dispersed
 soil.** In undispersed soil, clay bound into aggregates is retained on coarser
 sieves, so assigning Table 1's silt+clay to the <53 µm class is itself part of
 A1b, not an independent measurement.
 
-### What the day-0 comparison is — a plausibility check, not a target
+### What the day-0 comparison used to be
 
-Predicted day-0 MWD (A1 + A1b) against Table 2:
+Under A1 it was a plausibility check and explicitly not a target: a miss could
+not be attributed between A1 and A1b, so fitting to it would tune one assumption
+to absorb error in the other. Three of five soils landed within ±20 %:
 
 | Soil | sand % | 53–250 | 250–2000 | <53 | MWD pred | MWD obs | obs − pred |
 |---|---|---|---|---|---|---|---|
@@ -108,35 +168,8 @@ Predicted day-0 MWD (A1 + A1b) against Table 2:
 | 4 | 44 | 18.80 | 25.20 | 56.0 | 327 | 406 | +79 |
 | 5 | 21 | 8.97 | 12.03 | 79.0 | 170 | 358 | +188 |
 
-Three of five land within ±20 %, from an assumption made with no reference to
-any MWD. That is a reasonable plausibility check on A1 and worth reporting as
-such. It must **not** be used as a calibration target: a miss cannot be
-attributed between A1 and A1b, so fitting to it would tune one assumption to
-absorb error in the other. The logic is one-directional, and that asymmetry is
-what is usable:
-
-- Aggregation can only *add* mass to coarse classes. So if A1 were correct,
-  measured MWD ≥ predicted MWD for every soil.
-- **Soils 2 and 3 violate that** (−12 and −128 µm). Since negative aggregation is
-  impossible, **A1 assigns too much sand to the coarse class for those soils** —
-  their sand is finer than equal-mass-per-log-interval. Soil 3's 39 % shortfall
-  is well outside anything the marginal 5 % for soil 2 could be attributed to.
-- Soils 1, 4 and 5 show measured > predicted, which is **uninformative** — it is
-  equally consistent with day-0 aggregation and with coarser-than-log-linear
-  sand. These cannot be used as support for A1.
-
-Two observations that do not depend on either assumption, because they compare
-published numbers only:
-
-- **Soils 3 and 4 have identical measured texture (44 % sand) and day-0 MWDs a
-  factor of two apart (199 vs 406 µm).** Whatever sets the day-0 coarse fraction
-  is not captured by the texture triple.
-- **Soil 5's measured day-0 MWD exceeds what any sand split can produce.** With
-  21 % sand, assigning all of it to 250–2000 µm caps eq. (1) at
-  (1125·21 + 26.5·79)/100 = 257 µm, against 358 measured. Water-stable
-  aggregation survives the pretreatment there. Consistent with 27 % clay and CEC
-  17.4 (~2.6× the others), and relevant because soil 5 also shows 2.4× the
-  day-21 MWD and 2.4× the formation rate.
+**Under A1' this check is spent.** Days 1 onward remain independent of it, and
+soil 5's −112 µm residual is the one part of day 0 that still tests anything.
 
 ### A1c. Well-mixed matrix: material is absorbed in proportion to abundance (t > 0)
 
@@ -255,9 +288,10 @@ is no ambiguity about what is being compared.
 
 The model carries no particle-size distribution for unaggregated mineral matrix.
 It predicts the aggregate size classes only. Whole-sample eq. (1) MWD therefore
-requires A1; the class percentages and `pct_gt2000` do not, and `pct_gt2000` is
-free of A1 entirely — sand is ≤2000 µm by definition and the soil was crushed
-through 250 µm, so no primary particle can occupy that class.
+requires A1'; the class percentages and `pct_gt2000` do not, and `pct_gt2000` is
+free of A1' entirely — sand is ≤2000 µm by definition and the soil was crushed
+through 250 µm, so no primary particle can occupy that class. That makes
+`pct_gt2000` the one comparison untouched by the day-0 inversion.
 
 ---
 
@@ -290,6 +324,9 @@ Domain geometry (`ω`, `f_pack`, `N_POM`) moved to `src/physics/tessellation.jl`
 and is documented in `docs/REFERENCE.md` §5b. It was previously duplicated by
 copy-paste in `run_degryze.jl` and `optimize_soil3.jl`, which had diverged —
 `optimize_soil3.jl` was still running at 20 °C against the paper's 25 °C.
+(`optimize_soil3.jl` was archived on 2026-07-30 to
+`paper/_archive/degryze_tooling_20260730/`. It is named below only as history;
+nothing in it is live.)
 
 **Sieve-class outputs.** `population_outputs` takes the sieve series and the
 class labels from the caller, because the sieve series is a property of the
@@ -307,13 +344,17 @@ show mass moving between classes, which is the signal; it is the running sum of
 the class columns from the top if ever wanted.
 
 `pct_gt2000um` is the comparison target for Table 3, and the only class column
-free of assumption A1 — sand is ≤2000 µm by definition and the soil was crushed
+free of assumption A1' — sand is ≤2000 µm by definition and the soil was crushed
 through 250 µm, so no primary particle can occupy that class.
 
-Assumption A1's log-linear sand split is applied by
-`degryze_mineral_classes(id)`, which calls the general
-`log_interpolate_fraction` from `src/`. A1b and A1c still govern anything
-derived from it.
+Assumption A1's sand split is applied by `degryze_mineral_classes(id;
+f_POM_mass)`. Since 2026-07-29 it is **A1'**: the split comes from
+`sand_coarse_fraction(id; f_POM_mass)`, which inverts eq. (1) against the
+measured day-0 MWD in `DEGRYZE_MWD_DAY0`, and errors rather than clamping when
+no split can reach the measurement. Soil 5 is the one such case and is set by
+`DEGRYZE_SAND_COARSE_OVERRIDE`. The superseded log-linear A1 used
+`log_interpolate_fraction` from `src/`; that helper is untouched and still
+general. A1b and A1c still govern anything derived from this.
 
 **Population statistics moved to `src/`** *(2026-07-28)*. Aggregate mass, sieve
 binning, the fixed-weight MWD and the population sums are now
@@ -352,19 +393,26 @@ test.
 package's `sauter_from_texture`. The paper supplies the texture; the package
 supplies the method.
 
-| soil | sand / silt / clay | d₃₂ [µm] | G_c [µg/mm³] | G_c ÷ soil 3 |
-|---|---|---|---|---|
-| 1 | 0.53 / 0.40 / 0.07 | 8.954 | 0.02718 | 1.400 |
-| 2 | 0.33 / 0.57 / 0.10 | 6.327 | 0.01921 | 0.990 |
-| 3 | 0.44 / 0.45 / 0.11 | 6.394 | 0.01941 | 1.000 |
-| 4 | 0.44 / 0.43 / 0.13 | 5.734 | 0.01741 | 0.897 |
-| 5 | 0.21 / 0.52 / 0.27 | 3.099 | 0.00941 | 0.485 |
+`G_c` below is at `κ_b = 0.16` — the value at `r = δ_s` once the threshold
+became size-dependent (REFERENCE.md §4.4a).
 
-`κ_b = 2.25 × d₃₂(soil 3) = 0.0143869` reproduces the threshold previously in
-use exactly, so **the soil-3 run is unchanged by this revision**. Because `κ_b`
-is defined as a product with `d₃₂` rather than fitted to a rounded `G_c`, the
-equality is exact and independent of `τ_w`. Everything else follows from Table 1
-with no further fitting.
+| soil | sand / silt / clay | d₃₂ [µm] | G_c(δ_s) [µg/mm³] | G_c ÷ soil 3 |
+|---|---|---|---|---|
+| 1 | 0.53 / 0.40 / 0.07 | 8.954 | 0.00244 | 1.400 |
+| 2 | 0.33 / 0.57 / 0.10 | 6.327 | 0.00173 | 0.990 |
+| 3 | 0.44 / 0.45 / 0.11 | 6.394 | 0.00175 | 1.000 |
+| 4 | 0.44 / 0.43 / 0.13 | 5.734 | 0.00157 | 0.897 |
+| 5 | 0.21 / 0.52 / 0.27 | 3.099 | 0.00085 | 0.485 |
+
+**The last column is the content of this table; the fourth is not.** `κ_b` is a
+single fitted constant multiplying every row, so it sets the level and cancels
+from the ratios. The texture ordering and spacing come from `d₃₂` alone, out of
+Table 1, with no fitting.
+
+`κ_b` was 0.0143869 until 2026-07-29, chosen as `2.25 × d₃₂(soil 3)` so that
+soil 3 reproduced a legacy `G_c = 0.0194` exactly. That equality preserved a
+number with a dimensionally inconsistent derivation behind it (REFERENCE.md §26
+erratum 11) and constrained nothing, so it was dropped.
 
 ### What this predicts, and how it fares
 
@@ -797,7 +845,7 @@ every edit — treat the symbol, not the number, as the reference.
 | 8 | **POM size distribution** | `Normal(1.25, 0.23)` over 5 bins (L59–66) | only "**0.5–2 mm**" — no distribution given | 🟡 **open** — unconstrained assumption, recorded in the de_gryze README |
 | 9 | **POM bin count** | 5 bins (L62) | — | ✅ READMEs corrected from 23 to 5 |
 | 10 | **Residue chemistry** | unused | 11 % soluble / 3 % hemi / 46 % cellulose / 11 % lignin available | 🟡 **open** — free constraint left on the table |
-| 11 | **`s_M` comment** | `degryze_ic(SOIL_ID, soil; s_M = 0.6)` (L88), no comment | — | ✅ the mismatched comment is gone |
+| 11 | ~~**`s_M` comment**~~ | — | — | ✅ **moot 2026-07-29** — `s_M` deleted; MAOC saturation is now an output. REFERENCE §5d, §26 erratum 14 |
 | 12 | **Citation** | `paper/de_gryze/README.md` | see §5.2 | ✅ resolved |
 | 13 | **O₂ = 21 % constant** | `DEGRYZE_INCUBATION.O2_frac` (L99) | ✅ justified by daily air flushing | ✅ correct |
 | 14 | **Output cadence 3 h** | `dt_output = 0.125` (L114) | ✅ matches GC cadence | ✅ correct |
@@ -818,11 +866,14 @@ Rows 8 and 10 above, plus, from outside this table:
 - **Group B parameters** sit off their cited anchors by 3.3× to 1500×
   (`docs/REFERENCE.md` §5a). Fitting over Group C while Group B is off its
   anchors will absorb the Group B error invisibly. Fix Group B first.
-- **`optimize_soil3.jl` has not been migrated** to `degryze_soils.jl`: it still
-  hard-codes `ρ_bulk = 1300`, `SOC = 0.0221`, `ψ = −29`, `f_clay_silt = 0.74`
-  for soil 3, where `degryze_soil(3)` gives 1370 and `degryze_ic` derives ψ.
-  Its fitted parameters are separately invalid (fitted against the broken POM
-  normalization).
+- ~~**`optimize_soil3.jl` has not been migrated** to `degryze_soils.jl`~~ —
+  settled 2026-07-30 by archiving it rather than migrating it
+  (`paper/_archive/degryze_tooling_20260730/`). It hard-coded `ρ_bulk = 1300`,
+  `SOC = 0.0221`, `ψ = −29`, `f_clay_silt = 0.74` for soil 3 where
+  `degryze_soil(3)` gives 1370 and `degryze_ic` derives ψ, and its fitted
+  parameters were separately invalid (fitted against the broken POM
+  normalization). Calibration is a separate future project: hand-tune to close,
+  then one reusable fitting routine for all examples, tested against De Gryze.
 
 ### 6.1 [MY ANALYSIS] Suggested priority order
 

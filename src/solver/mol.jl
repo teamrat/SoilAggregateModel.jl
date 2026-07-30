@@ -18,7 +18,7 @@
 #
 # WHAT IS DELIBERATELY IDENTICAL
 #
-# The spatial operator here reproduces crank_nicolson.jl term for term — same
+# The spatial operator was written to reproduce crank_nicolson.jl term for term —
 # node-centred spherical stencil, same ARITHMETIC face average of D, same ghost
 # node treatment at the flux boundary. A better discretisation is available
 # (finite-volume flux form with harmonic face averages) and is NOT used, because
@@ -112,7 +112,7 @@ end
 
 Spherical diffusion operator at node `i` for the species in column `k`.
 
-Reproduces `crank_nicolson_step!` exactly:
+The spatial operator, matched to the conservation weights of §18:
 
     L_i = (1/r_i²h²)·[r_{i+½}² D_{i+½} (u_{i+1} − u_i)
                       − r_{i−½}² D_{i−½} (u_i − u_{i−1})]

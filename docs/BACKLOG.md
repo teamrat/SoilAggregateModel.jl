@@ -18,12 +18,13 @@ closed.
 ## Dependency order
 
 **Speed is DONE** (item 1). Duplication is DONE (archived audit §B, four passes).
-Remaining: **verification → anchors → decisions → fit.**
+**Verification and structure are DONE** (items 8, 9, 15). Remaining: **anchors →
+decisions → fit.** The architectural work is finished; what is left is
+calibration, plus documentation items 12–14.
 
-Item 8 is DONE (2026-07-30): the solvers agree, and the split solver's production
-`dt_min` was the reason it looked otherwise. Item 9 — tests for the default
-solver — is now first, and 8 supplies its tolerance: 3e-3 on the interior pools
-once the split solver is converged.
+Items 8, 9 and 15 are DONE (2026-07-30). The solvers agree, the production solver
+is under test, the two Laplacians are pinned to each other, and the solver switch
+and both diverging defaults are in `src/`.
 
 Fitting free parameters while anchored ones sit off their cited values absorbs
 the Group B error into the free ones and makes the deviation invisible. Items 3
@@ -188,7 +189,49 @@ listed as working assumptions below.
 
 ---
 
-## ~~8. Solver agreement~~ — **RUN 2026-07-30.** Result in REFERENCE §17a
+## ~~8a. DOC diverges between the solvers at 45 days~~ — **CLOSED 2026-07-30 by archiving the split solver**
+
+**The finding is about the reference, not about the stiff solver.** A
+disagreement with an instrument that evaluates rate laws on negative arguments and
+folds its clipping into CO₂ unreported is a fact about that instrument. The stiff
+solver at 45 days — and at 22 — is **unverified, not suspect**: there is no
+evidence either way, because the only thing that could have produced evidence was
+not fit to produce it.
+
+Chasing it showed the reference implementation was not fit to be a reference:
+rate laws evaluated on negative arguments, clipping folded into CO₂ without being
+reported, lagged coefficients, and first order where its docstring claimed
+second. On every accuracy axis the stiff solver is the better formulation, and
+repairing all four would have destroyed the one thing the split solver was kept
+for — the cheap, independent CO₂ integration.
+
+Archived to `_archive/split_solver_20260730/` with the full disposition:
+`timestepper.jl`, `reaction_step.jl`, `diffusion_step.jl`, `crank_nicolson.jl`,
+`tridiagonal.jl`, `finite_volumes.jl` (no caller at all), their four test files,
+and `verify_solver_agreement.jl`. `Workspace`, `update_effective_diffusion!`,
+`run_aggregate` and the `run_aggregate(solver, ...)` dispatch went with them.
+
+**What this costs, stated plainly: there is no integrated mass-balance
+measurement in the package today.** `test_closure.jl` still asserts the closure
+identity pointwise, which REFERENCE §17a ranks above the integrated check anyway.
+
+## NEXT — cumulative respiration as an explicit state
+
+A version carrying cumulative respired carbon as a state variable, written as a
+**separate test case for the mass-balance check**. It restores the measurement
+inside the production solver instead of borrowing it from a second integrator.
+
+Carry it **per node**, not as a global scalar: one CO₂ scalar makes the Jacobian
+row dense across every node, and the sparse linear solve is already 33 % of
+runtime. A per-node field is purely local, keeps the block-tridiagonal structure,
+and takes the block from 8×8 to 9×9.
+
+`mass_balance_error` stays in `OutputRecord` and reports NaN until then — the
+tests now assert `isnan` rather than a tolerance.
+
+---
+
+## ~~8. Solver agreement (22 days)~~ — **RUN 2026-07-30.** Result in REFERENCE §17a
 
 The two solvers describe the same model, and the split solver's production floor
 is what was hiding it.
@@ -220,29 +263,26 @@ even if the split answer had moved away. The measured gaps were unaffected.*
 
 ---
 
-## 9. `run_aggregate_stiff` has no tests
+## ~~9. `run_aggregate_stiff` has no tests~~ — **CLOSED 2026-07-30**
 
-The default solver — the one every number comes from — has **zero** direct
-coverage. Needed, in order:
+`test/test_stiff.jl`, registered in `runtests.jl`:
 
-- one end-to-end call to `run_aggregate_stiff`;
-- `mol_laplacian` pinned against `crank_nicolson_step!`. `mol.jl` reproduces that
-  Laplacian term for term deliberately, a reader verified all three branches
-  including the `D₁` cancellation at the flux boundary, and **no test holds them
-  together** — the sanction is a comment;
-- a short-horizon version of item 8's Part 1 as a test, so a change to the source
-  terms fails the suite instead of waiting to be noticed;
-- the two default divergences between the solvers: `n_grid` 50 vs 200, and the
-  output schedules (1-day interval vs exactly two records);
-- `test_output_times.jl:63` asserts `|mass_balance_error| < 1e-12`, which the
-  stiff path cannot satisfy by design — it reports NaN because it recovers CO₂ by
-  difference.
-
-**Tolerance, from item 8:** 3e-3 on the interior pools with the split solver at
-`dt_min = 1e-5`; do not write a test against its production floor, which is not
-converged. For a short-horizon test the lag is smaller still.
-
----
+- **`mol_laplacian` pinned against `crank_nicolson_step!`.** With θ = 0 the
+  Crank–Nicolson left-hand matrix is the identity, so `u_new = u + dt·L[u]`
+  exactly and `(u_new − u)/dt` recovers its Laplacian to roundoff. Compared node
+  for node over three grids, with the inner flux off, on, and reversed, against a
+  non-smooth profile and a spatially varying `D` — a stencil error that cancels
+  on a linear profile does not cancel there. This is the invariant the comment in
+  `mol.jl` had been standing in for.
+- **End to end**: result shape, output times honoured, `retcode`, POM consumed,
+  recovered CO₂ monotone and non-negative, all eight fields finite and
+  non-negative, and `mass_balance_error` **NaN rather than 0.0** — reporting 0.0
+  would read as a passing check on something never checked (§17a).
+- **Short-horizon agreement** between the two solvers, threshold 0.1. Deliberately
+  loose: `mol.jl` documents three differences by construction, and §17a puts the
+  22-day gap at 4.2e-2 at the split solver's production floor. 1e-3 is the lag,
+  1e-1 is a bug — this guards the bug, so it cannot go flaky.
+- **The dispatcher** and the two shared defaults.
 
 ## 10. No parameter has a firm value yet
 
@@ -313,6 +353,37 @@ restoring `0.0143869` on the belief that it was measured; and the note preventin
 fit to a datum the model was constructed from. Lowest priority here, but it is the
 same failure as the documentation sprawl — narrative kept where an invariant
 belongs.
+
+---
+
+## ~~15. Structure~~ — **CLOSED 2026-07-30**
+
+All four, verified against the tree:
+
+- **The `:stiff`/`:split` switch is in `src/`.** `run_aggregate(solver, bio, soil,
+  ...)` dispatches; `dt_max`/`dt_min` apply to `:split` and are accepted and
+  ignored by `:stiff`, so one call site serves both. `postprocess_dataframe.jl`
+  calls it and no longer carries its own branch or its own argument validation.
+- **`n_grid` defaults agree**: `N_GRID_DEFAULT = 200` in `constants.jl`, used by
+  both. It was 50 on the split side and 200 on the stiff side. Every call in
+  `test/` and `paper/` passes `n_grid` explicitly — checked, 24 of 24 — so
+  nothing in the suite changes behaviour.
+- **Default output schedules agree**: `default_output_times(t_start, t_end)`,
+  every `min(1, span/10)` days with the end point included. The stiff solver
+  previously recorded exactly two points where the split solver recorded a
+  trajectory.
+- **`create_initial_state_legacy` deleted** — no caller in `src/`, `test/` or
+  `paper/`, and it seeded a fixed background DOC of 1e-4 instead of partitioning
+  measured SOC. `create_initial_state` and `EnvironmentalDrivers` are now
+  exported, so the supported entry point is public.
+- **Shared setup extracted**: `setup_run` builds grid, environment and state once
+  for both solvers, which had identical copies of that block.
+
+## ~~Structural deviations from Falconer~~ — **RECORDED 2026-07-30**
+
+All three written up as decisions with their justification: REFERENCE §9a (table)
+and the manuscript, §sec:fungal_dynamics (one paragraph). `F_i` turnover, ζ
+applying to the reaction term only, and the conversion cost as an explicit flux.
 
 ---
 

@@ -58,15 +58,25 @@ const DIAM  = DIAM_ALL[argmin(abs.(DIAM_ALL .- POM_MEAN))]
 const R_0   = DIAM / 2.0
 const R_MAX = DIAM * DOMAIN_FACTOR / 2.0
 const P0    = (4.0 / 3.0) * π * R_0^3 * ρ_POM
-const TIMES = collect(0.0:DT_OUTPUT:T_MAX)
+# Horizon. Defaults to the De Gryze window; pass one on the command line to test
+# a longer one. 45 d is the interesting case: the split solver's required step is
+# still falling there (4.9e-5 d against its 1e-4 floor), so it is where the two
+# solvers were first seen to disagree.
+#
+#     julia --project=. paper/de_gryze/verify_solver_agreement.jl 45
+#
+# At 45 d the refined split run takes several minutes — its cost per simulated
+# day grows while the stiff solver's falls.
+const T_END = isempty(ARGS) ? T_MAX : parse(Float64, ARGS[1])
+const TIMES = collect(0.0:DT_OUTPUT:T_END)
 
 common = (n_grid = N_GRID, r_0 = R_0, r_max = R_MAX,
           ic = IC, P_0 = P0, ω = OMEGA, output_times = TIMES)
 
 run_stiff() = run_aggregate_stiff(BIO, SOIL, T_FUNC, PSI_FUNC, O2_FUNC,
-                                  (0.0, T_MAX); common...)
+                                  (0.0, T_END); common...)
 run_split(; dt_min = 1e-4) = run_aggregate(BIO, SOIL, T_FUNC, PSI_FUNC, O2_FUNC,
-                                  (0.0, T_MAX); dt_min = dt_min, dt_max = 0.1, common...)
+                                  (0.0, T_END); dt_min = dt_min, dt_max = 0.1, common...)
 
 # Relative difference on a profile: scaled by the reference's own magnitude, so a
 # pool that is uniformly tiny does not read as a large disagreement.
@@ -99,7 +109,7 @@ function compare(label, ra, rb)
 end
 
 println("="^78)
-println("SOLVER AGREEMENT — soil $(SOIL_ID), D = $(DIAM) mm, n = $(N_GRID), $(T_MAX) d")
+println("SOLVER AGREEMENT — soil $(SOIL_ID), D = $(DIAM) mm, n = $(N_GRID), $(T_END) d")
 println("  config: degryze_config.jl        reference: run_aggregate (split)")
 println("="^78)
 
@@ -121,7 +131,7 @@ print("split ... ");     t_split = @elapsed r_split = run_split();  @printf("%.1
 @printf("  speedup %.1fx     split steps %d\n\n",
         t_split / t_stiff, r_split.diagnostics["n_steps"])
 
-println("PART 1 — agreement at day $(T_MAX), split (production floor) vs stiff")
+println("PART 1 — agreement at day $(T_END), split (production floor) vs stiff")
 println("-"^78)
 worst = compare("dt_min 1e-4 vs stiff", r_split, r_stiff)
 
@@ -186,6 +196,45 @@ else
     println("  refinement, so the residual is not purely a step-size effect.")
     println("  Something else contributes. Explain before quoting.")
 end
+# ── PART 3, only when something moved the wrong way ──────────────────────────
+#
+# A field that diverges on refinement is either a real structural disagreement or
+# a tolerance artefact, and the two are told apart by WHERE the gap lives. If the
+# worst node is one where the field has decayed far below its own initial value,
+# suspect the stiff solver's absolute tolerance: `abstol_scale` sets it from |u0|
+# (abstol = max(abstol, abstol_scale·|u0|)), so a pool that starts at 1e-2 and
+# falls to 1e-9 is being controlled to ~10 % of itself by the end of a long run.
+# `bench_stiff.jl` flagged the mirror image of this for F_m, which starts tiny and
+# grows.
+
+diverged = [f for f in FIELDS if g_ref[f] >= g_prod[f]]
+if !isempty(diverged)
+    println("\nPART 3 — where the diverging gap lives")
+    println("-"^78)
+    sr, ss = r_ref.outputs[end].state, r_stiff.outputs[end].state
+    @printf("  %-5s %6s %10s %12s %12s %12s %10s\n",
+            "field", "node", "r [mm]", "split", "stiff", "profile max", "value/u0")
+    for f in diverged
+        x, y = getfield(sr, f), getfield(ss, f)
+        i = argmax(abs.(x .- y))
+        u0 = getfield(r_stiff.outputs[1].state, f)[i]
+        @printf("  %-5s %6d %10.4f %12.4e %12.4e %12.4e %10.2e\n",
+                f, i, r_stiff.grid.r_grid[i], x[i], y[i],
+                maximum(abs, y), u0 == 0 ? NaN : abs(y[i]) / abs(u0))
+    end
+    println("""
+  A `value/u0` far below 1 with the worst node in a depleted region means the
+  stiff solver's absolute tolerance, not a structural disagreement. Test it by
+  re-running with a tolerance floor tied to the field's own scale rather than its
+  initial value:
+
+      run_aggregate_stiff(...; reltol = 1e-8, abstol = 1e-14, abstol_scale = nothing)
+
+  If the gap closes, the tolerance is the cause and `abstol_scale` needs to stop
+  being anchored to u0. If it does not, the disagreement is structural and
+  neither solver should be quoted at this horizon.""")
+end
+
 println()
 println("  This is a CONSISTENCY result between two discretisations, not a")
 println("  verification against an analytic solution. Record it in REFERENCE §17a")

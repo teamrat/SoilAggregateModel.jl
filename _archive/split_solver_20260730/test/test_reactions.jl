@@ -37,7 +37,6 @@ import SoilAggregateModel: AggregateState, Workspace, TemperatureCache, SourceTe
         temp_cache.D_O2_w = 1.0
         temp_cache.D_DOC_w = 0.5
         temp_cache.D_O2_a = 100.0
-        temp_cache.D_Fm = 0.1
         temp_cache.K_H_O = 30.0
 
         # Compute source terms
@@ -89,7 +88,6 @@ import SoilAggregateModel: AggregateState, Workspace, TemperatureCache, SourceTe
         temp_cache.D_O2_w = 1.0
         temp_cache.D_DOC_w = 0.5
         temp_cache.D_O2_a = 100.0
-        temp_cache.D_Fm = 0.1
         temp_cache.K_H_O = 30.0
 
         sources = compute_source_terms(C, B, F_n, F_m, F_i, E, M, O, θ, θ_a, ψ,
@@ -139,7 +137,6 @@ import SoilAggregateModel: AggregateState, Workspace, TemperatureCache, SourceTe
             1.0,   # D_O2_w
             0.5,   # D_DOC_w
             100.0, # D_O2_a
-            0.1,   # D_Fm
             30.0   # K_H_O
         )
 
@@ -222,7 +219,7 @@ import SoilAggregateModel: AggregateState, Workspace, TemperatureCache, SourceTe
         state.CO2_cumulative = 0.0
 
         # Temperature cache
-        temp_cache = TemperatureCache(1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.5, 100.0, 0.1, 30.0)
+        temp_cache = TemperatureCache(1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.5, 100.0, 30.0)
         workspace = Workspace(
             Vector{Float64}(undef, n-1), Vector{Float64}(undef, n), Vector{Float64}(undef, n-1), Vector{Float64}(undef, n),
             fill(0.3, n), fill(0.2, n),
@@ -278,7 +275,7 @@ import SoilAggregateModel: AggregateState, Workspace, TemperatureCache, SourceTe
         state.CO2_cumulative = 0.0
 
         # Temperature cache
-        temp_cache = TemperatureCache(1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.5, 100.0, 0.1, 30.0)
+        temp_cache = TemperatureCache(1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.5, 100.0, 30.0)
         workspace = Workspace(
             Vector{Float64}(undef, n-1), Vector{Float64}(undef, n), Vector{Float64}(undef, n-1), Vector{Float64}(undef, n),
             fill(0.3, n), fill(0.2, n),
@@ -336,7 +333,7 @@ import SoilAggregateModel: AggregateState, Workspace, TemperatureCache, SourceTe
         state.CO2_cumulative = 0.0
 
         # Temperature cache
-        temp_cache = TemperatureCache(1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.5, 100.0, 0.1, 30.0)
+        temp_cache = TemperatureCache(1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.5, 100.0, 30.0)
         workspace = Workspace(
             Vector{Float64}(undef, n-1), Vector{Float64}(undef, n), Vector{Float64}(undef, n-1), Vector{Float64}(undef, n),
             fill(0.3, n), fill(0.2, n),

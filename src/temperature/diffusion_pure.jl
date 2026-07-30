@@ -209,6 +209,7 @@ D = D_fungal_translocation(298.15, 1.0, 55_000.0, 293.15)
   D_Fm(T) = D_Fm_ref × arrhenius(Ea_F, T, T_ref)
 """
 function D_fungal_translocation(T::Real, D_ref::Real, Ea::Real, T_ref::Real)
-    # Uses R_GAS from constants.jl
-    D_ref * exp(Ea / R_GAS * (1.0 / T_ref - 1.0 / T))
+    # arrhenius(), not a second copy of it. The docstring above has said to use
+    # arrhenius() since this function was written; it did not. CLAUDE.md §8.
+    D_ref * arrhenius(Ea, T, T_ref)
 end

@@ -14,7 +14,6 @@ a simulation.
 
 # Fields
 - `SOC`: Total soil organic carbon mass fraction [-] (e.g., 0.0183 for 1.83%)
-- `s_M`: MAOC saturation ratio [-] (fraction of mineral capacity occupied)
 - `f_bact`: Bacterial C as fraction of total SOC [-]
 - `f_fungi`: Fungal C as fraction of total SOC [-]
 - `f_insulated`: Fraction of native fungal C that starts insulated (F_i) [-];
@@ -26,26 +25,26 @@ a simulation.
 
 # Notes
 - SOC is mass-based (µg-C per g-soil), converted internally via ρ_b
-- s_M uses texture information through M_max = k_ma × f_clay_silt × ρ_b
+- MAOC follows from sorption equilibrium with `maoc_capacity(soil)`; its
+  saturation `M/M_max` is an OUTPUT, not an input
 - Microbial fractions (f_bact, f_fungi, f_eps) are literature defaults;
   override with soil-specific measurements when available
 - Typical ranges: f_bact ∈ [0.005, 0.03], f_fungi ∈ [0.005, 0.05],
-  f_eps ∈ [0.001, 0.01], s_M ∈ [0.2, 0.8], f_insulated ∈ [0.2, 0.8]
+  f_eps ∈ [0.001, 0.01], f_insulated ∈ [0.2, 0.8]
 - `f_insulated = 1.0` reproduces the pre-2026-07 behaviour exactly (all fungal
   C in F_i, F_n seeded at bio.F_n_min) and is useful as a control
 
 # Example
 ```julia
 # De Gryze Soil 1: low SOC, sandy
-ic1 = InitialConditions(SOC = 0.0125, s_M = 0.3)
+ic1 = InitialConditions(SOC = 0.0125)
 
 # De Gryze Soil 3: high SOC, clayey
-ic3 = InitialConditions(SOC = 0.0221, s_M = 0.5, f_fungi = 0.02)
+ic3 = InitialConditions(SOC = 0.0221, f_fungi = 0.02)
 ```
 """
 struct InitialConditions
     SOC::Float64            # Total SOC mass fraction [-] (e.g., 0.0183 for 1.83%)
-    s_M::Float64            # MAOC saturation ratio [-]
     f_bact::Float64         # Bacterial C fraction of SOC [-]
     f_fungi::Float64        # Fungal C fraction of SOC [-]
     f_insulated::Float64    # Fraction of fungal C starting as F_i [-]
@@ -65,7 +64,6 @@ All fields can be overridden. Only `SOC` is typically required per soil.
 """
 function InitialConditions(;
     SOC = 0.015,            # [-] 1.5% SOC, moderate agricultural soil
-    s_M = 0.4,              # 40% of mineral capacity occupied
     f_bact = 0.01,          # 1% of SOC in bacteria
     f_fungi = 0.01,         # 1% of SOC in fungi
     f_insulated = 0.5,      # half of native fungal C starts insulated
@@ -77,19 +75,19 @@ function InitialConditions(;
     if !(0.0 ≤ f_insulated ≤ 1.0)
         error("f_insulated must lie in [0, 1]; got $(f_insulated)")
     end
-    InitialConditions(SOC, s_M, f_bact, f_fungi, f_insulated, f_eps,
+    InitialConditions(SOC, f_bact, f_fungi, f_insulated, f_eps,
                       T_0, ψ_0, O2_gas)
 end
 
 """
-    partition_CM(R, s_M, M_max, k_L, k_d, θ, ρ_b, n_LF;
+    partition_CM(SOC_residual, M_max, k_L, k_d, θ, ρ_b, n_LF;
                  tol=1e-12, maxiter=50)
 
 Partition residual SOC between DOC (C) and MAOC (M) at thermodynamic equilibrium.
 
-Given a residual R = SOC_vol − (biotic pools), find C and M such that:
+Given `SOC_residual = SOC_vol − (biotic pools)`, find C and M such that:
   1. C + M = R                                        (mass balance)
-  2. M = s_M × M_max × f_LF(β × C)                   (isotherm equilibrium)
+  2. M = M_max × f_LF(β × C)                         (sorption equilibrium)
 
 where β = k_L × k_d / (θ + ρ_b × k_d) is the lumped isotherm parameter that
 converts total DOC concentration C into the equivalent aqueous → sorbed
@@ -103,11 +101,11 @@ surfaces can absorb all available carbon:
 
 **DOC-limited regime** (M_eq(R) < R): The isotherm evaluated at C = R (maximum
 possible DOC) returns M_eq < R. There is more carbon than minerals can hold.
-The solution has substantial DOC and M < s_M × M_max. Forward fixed-point
+The solution has substantial DOC and M < M_max. Forward fixed-point
 iteration converges reliably: guess M → compute C = R − M → evaluate M_eq →
 update M. This is a contraction mapping when M_eq < R.
 
-**Mineral-limited regime** (M_eq(R) ≥ R): The mineral capacity (s_M × M_max)
+**Mineral-limited regime** (M_eq(R) ≥ R): The mineral capacity `M_max`
 exceeds the available carbon R. Nearly all carbon should be mineral-associated,
 with only trace DOC needed to maintain equilibrium. The correct solution has
 M ≈ R and C ≪ R.
@@ -118,7 +116,7 @@ Forward iteration *fails* in this regime because:
   3. Oscillation between extremes; no convergence
 
 Instead, we solve for C directly using bisection on the residual equation:
-  g(C) = C + s_M × M_max × f_LF(β × C) − R = 0
+  g(C) = C + M_max × f_LF(β × C) − SOC_residual = 0
 
 This is robust because g(C) is strictly monotonically increasing in C
 (both C and M_eq increase with C), guaranteeing a unique root. Bisection
@@ -126,8 +124,7 @@ on C ∈ [C_floor, R] always converges.
 
 # Arguments
 - `R`: Residual carbon to partition [µg/mm³]
-- `s_M`: MAOC saturation ratio [-] (fraction of capacity, 0 < s_M ≤ 1)
-- `M_max`: Maximum MAOC capacity [µg/mm³] (= k_ma × f_clay_silt × ρ_b)
+- `M_max`: Maximum MAOC capacity [µg/mm³] — pass `maoc_capacity(soil)`
 - `k_L`: Langmuir affinity constant [mm³/µg]
 - `k_d`: Solid-liquid partition coefficient (equilibrium sorption) [mm³/µg]
 - `θ`: Water content [-]
@@ -147,40 +144,47 @@ Named tuple `(C=..., M=..., regime=...)` where:
 # Notes
 - C + M = R is enforced exactly (M is always computed as R − C)
 - The returned M satisfies the isotherm to within `tol`
-- Prints a warning if the achieved MAOC saturation differs significantly
-  from the requested s_M (indicates mineral-limited regime where full
-  saturation is impossible given available carbon)
+- **Saturation is an OUTPUT, not an input.** `M/M_max` is whatever sorption
+  equilibrium with the available carbon produces. As the affinity `k_L` rises,
+  `C → 0` and the saturation approaches `SOC_residual/M_max` — set entirely by
+  measured SOC and measured texture. That makes it a prediction testable against
+  reported saturation deficits (Georgiou et al. 2022), not a knob.
+
+  Until 2026-07-29 an `s_M` argument scaled the isotherm, so the state was placed
+  at `s_M` of local equilibrium and the solver — which has no `s_M` — sorbed from
+  t = 0 to close the gap. Two isotherms for one quantity; see REFERENCE §26
+  erratum 14.
+
+- **On the name.** `SOC_residual`, not `R`. The manuscript uses a script R for
+  total respiration and `R_*` is a rate everywhere in `src/`; a carbon stock
+  called `R` collided with both.
 
 # Example
 ```julia
 # Typical silt loam: plenty of mineral capacity
-R = 27.9       # µg-C/mm³ residual SOC
-M_max = 461.8  # from texture
-s_M = 0.6      # 60% saturation target
-CM = partition_CM(R, 0.6, 461.8, 1000.0, 0.05, 0.35, 1300.0, 0.7)
-# → mineral-limited: M ≈ 27.5, C ≈ 0.4 (nearly all SOC is MAOC)
-# → actual saturation ≈ 27.5/461.8 = 6.0% (well below target — not enough C)
+SOC_residual = 27.9   # µg-C/mm³, SOC_vol minus the biotic pools
+M_max        = 46.18  # maoc_capacity: 0.048 × 0.74 × 1300
+CM = partition_CM(SOC_residual, M_max, 1000.0, 0.05, 0.35, 1300.0, 0.7)
+# → mineral-limited: nearly all SOC becomes MAOC; CM.M/M_max is the
+#   predicted saturation
 ```
 """
-function partition_CM(R::Real, s_M::Real, M_max::Real,
+function partition_CM(SOC_residual::Real, M_max::Real,
                       k_L::Real, k_d::Real, θ::Real, ρ_b::Real, n_LF::Real;
                       tol::Real=1e-12, maxiter::Int=50)
+    R = SOC_residual        # local shorthand; see the docstring on the name
     C_floor = 1e-6  # minimum DOC [µg/mm³]
 
     # Lumped isotherm parameter: converts total C to effective concentration
     # seen by mineral surfaces
-    β = k_L * k_d / (θ + ρ_b * k_d)
+    β = k_L * k_d / sorption_capacity(θ, ρ_b, k_d)
 
     # --- Isotherm evaluation helper ---
-    function M_eq(C::Real)
-        βC = β * C
-        if βC > 0.0
-            βC_n = βC^n_LF
-            return s_M * M_max * βC_n / (1.0 + βC_n)
-        else
-            return 0.0
-        end
-    end
+    # M_eq_langmuir_freundlich, not a second copy of the isotherm. β lumps
+    # k_L·k_d/(θ + ρ_b·k_d) so that β·C is the k_L·C_eq the primitive expects,
+    # and passing k_L = 1 avoids applying the affinity twice. CLAUDE.md §8.
+    M_eq(C::Real) = C > 0.0 ?
+        M_eq_langmuir_freundlich(β * C, M_max, 1.0, n_LF) : 0.0
 
     # --- Regime detection ---
     # Evaluate isotherm at C = R (maximum possible DOC).
@@ -192,7 +196,7 @@ function partition_CM(R::Real, s_M::Real, M_max::Real,
         # ═══ DOC-limited regime ═══
         # Forward fixed-point iteration: M_{k+1} = M_eq(R - M_k)
         # Contraction mapping guaranteed when M_eq(R) < R.
-        M = min(0.5 * R, s_M * M_max)
+        M = min(0.5 * R, M_max)
 
         for iter in 1:maxiter
             C = R - M
@@ -238,14 +242,6 @@ function partition_CM(R::Real, s_M::Real, M_max::Real,
 
             if abs(g_mid) < tol || (C_hi - C_lo) < tol
                 M_final = R - C_mid
-                M_eq_full = M_eq(C_mid) / s_M  # full equilibrium (undo s_M scaling)
-                s_actual = M_final / M_eq_full
-                if abs(s_actual - s_M) > 0.01 * s_M
-                        @info "partition_CM: mineral-limited regime. " *
-                          "M=$(round(M_final, sigdigits=4)) µg/mm³, " *
-                          "M_eq=$(round(M_eq_full, sigdigits=4)) µg/mm³, " *
-                          "saturation=$(round(s_actual * 100, digits=1))% " *
-                          "(target=$(round(s_M * 100, digits=1))%)"                end
                 return (C = C_mid, M = M_final, regime = :mineral_limited)
             end
 
@@ -277,7 +273,7 @@ Create initial state by partitioning measured SOC into model pools.
 2. Biotic pools: B, F_i, E from prescribed fractions of SOC
 3. Fungal C split between F_i and F_n by ic.f_insulated; F_m seeded at
    minimum viable concentration
-4. MAOC capacity: M_max from texture (k_ma × f_clay_silt × ρ_b)
+4. MAOC capacity: `maoc_capacity(soil)` = k_ma × f_clay_silt × ρ_b
 5. C and M from iterative partition (thermodynamically consistent)
 6. O₂ from gas-total conversion
 7. Dilute concentrations by 1/ω for overlapping model domains
@@ -308,7 +304,7 @@ See domain_tessellation_supplemental.md for derivation and error analysis.
 ```julia
 bio  = BiologicalProperties()
 soil = SoilProperties(f_clay_silt = 0.42)
-ic   = InitialConditions(SOC = 0.0183, s_M = 0.4)
+ic   = InitialConditions(SOC = 0.0183)
 # Heavy amendment: f_pack = 3.2, f_domain = 10 → ω = 30.5
 state = create_initial_state(200, bio, soil, ic; P_0 = 500.0, ω = 30.5)
 ```
@@ -359,9 +355,10 @@ function create_initial_state(n::Int, bio::BiologicalProperties,
     F_m_0 = bio.F_m_min
 
     # === Step 3: Water content at ψ_0 ===
-    m_vg = 1.0 - 1.0 / soil.n_vg
-    θ_0 = soil.θ_r + (soil.θ_s - soil.θ_r) *
-          (1.0 + (-soil.α_vg * ic.ψ_0)^soil.n_vg)^(-m_vg)
+    # van_genuchten, not an inline copy: the inline form raised a negative base
+    # to the power n_vg at saturation (ψ_0 = 0, which van_genuchten_inverse
+    # returns exactly) and threw DomainError. CLAUDE.md §8.
+    θ_0 = van_genuchten(ic.ψ_0, soil.α_vg, soil.n_vg, soil.θ_r, soil.θ_s)
     θ_a_0 = soil.θ_s - θ_0
 
     # === Step 4: Residual for C + M ===
@@ -378,29 +375,29 @@ function create_initial_state(n::Int, bio::BiologicalProperties,
 
 
     # === Step 5: Iterative C–M partition ===
-    # M_max from texture (may differ from soil.M_max if f_clay_silt overridden)
-    M_max = soil.k_ma * soil.f_clay_silt * soil.ρ_b
+    # The one definition (biology/maoc.jl). Formerly computed inline here while
+    # the solver read a separate `soil.M_max` field — see erratum 12.
+    M_max = maoc_capacity(soil)
 
-    CM = partition_CM(R, ic.s_M, M_max,
+    CM = partition_CM(R, M_max,
                       soil.k_L, soil.k_d_eq, θ_0, soil.ρ_b, soil.n_LF)
 
     C_0 = CM.C
     M_0 = CM.M
 
-    # Diagnostic: report MAOC saturation
-    β_diag = soil.k_L * soil.k_d_eq / (θ_0 + soil.ρ_b * soil.k_d_eq)
-    βC_diag = β_diag * C_0
-    βC_n_diag = βC_diag^soil.n_LF
-    M_eq_full_diag = M_max * βC_n_diag / (1.0 + βC_n_diag)
-    s_M_actual = M_0 / M_eq_full_diag
+    # Diagnostic: the PREDICTED MAOC saturation. maxlog=1 — a diameter sweep
+    # calls this once per aggregate with an identical initial condition, so it
+    # printed ten identical lines per run and 26 per test suite. Nothing asserts
+    # on this log, so capping it is safe. Compare with reported
+    # saturation deficits (Georgiou et al. 2022) — this is a model output.
+    # Ceiling: as k_L rises, C -> 0 and saturation -> R/M_max, which is fixed by
+    # measured SOC and measured texture alone.
     @info "SOC partition: regime=$(CM.regime), " *
           "C=$(round(C_0, sigdigits=4)) µg/mm³, " *
           "M=$(round(M_0, sigdigits=4)) µg/mm³, " *
-          "MAOC saturation=$(round(s_M_actual * 100, digits=1))% " *
-          "(target=$(round(ic.s_M * 100, digits=1))%)"
-
-
-
+          "MAOC saturation=$(round(100 * M_0 / M_max, digits=1))% " *
+          "(ceiling at this SOC and texture: $(round(100 * R / M_max, digits=1))%), " *
+          "pore-water DOC=$(round(1000 * C_aqueous(C_0, θ_0, soil), sigdigits=3)) mg/L" maxlog = 1
 
     # === Step 6: Oxygen (gas → total soil) ===
     K_H = K_H_O2(ic.T_0)
@@ -420,8 +417,11 @@ function create_initial_state(n::Int, bio::BiologicalProperties,
     end
 
     # === Step 8: Domain overlap dilution ===
-    # Divide all concentrations by ω so each model domain contains
-    # exactly its proportionate share of background carbon.
+    # NO-OP at ω = 1, which is the only consistent setting — see
+    # tessellation.jl and REFERENCE.md §26 erratum 13. Retained because
+    # f_domain_min can still be raised for experiments, but any ω > 1 leaves the
+    # state diluted while every concentration constant it is compared against is
+    # not, and no rescaling fixes that.
     # POM (P_0) is NOT diluted — it is a lumped scalar at the center.
     # O₂ is NOT diluted — it is a boundary condition, not a carbon pool.
     if ω != 1.0

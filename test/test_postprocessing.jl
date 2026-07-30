@@ -13,7 +13,7 @@ import SoilAggregateModel: compute_source_terms, _prepare_environment, compute_t
     ψ(t) = -10.0   # kPa
     O2(t) = 0.3    # μg/mm³
 
-    result = run_aggregate(bio, soil, T, ψ, O2, (0.0, 30.0);
+    result = run_aggregate_stiff(bio, soil, T, ψ, O2, (0.0, 30.0);
                           n_grid=30, output_times=Float64.(0:1:30))
 
     @testset "integrated_pools — both domains" begin
@@ -368,7 +368,7 @@ end
     ψ(t) = -10.0
     O2(t) = 0.3
 
-    result = run_aggregate(bio, soil, T, ψ, O2, (0.0, 30.0);
+    result = run_aggregate_stiff(bio, soil, T, ψ, O2, (0.0, 30.0);
                            n_grid=30, output_times=Float64.(0:1:30))
 
     for idx in (2, 15, 31)                     # early, mid, late

@@ -992,8 +992,21 @@ S_Fm = Γ_F − immobil_i − immobil_n − Resp_F_conv
 ```
 
 Mobilization is currently disabled (β_i = β_n = 0), so `S_Fn ≥ 0` and F_n has no
-sink of any kind — Falconer gives b_n no death term either (falconer_answers.md
-§C1). With β > 0 the bracket becomes signed and F_n can lose biomass.
+sink of any kind. With β > 0 the bracket becomes signed and F_n can lose biomass.
+
+### 9a. Three deliberate departures from Falconer
+
+Recorded as decisions, not defects. Sources in `dev_notes/falconer_answers.md`.
+
+| | Falconer | Here | Why |
+|---|---|---|---|
+| **`F_i` death** | no death term on either sessile pool (§C1, §C2) | `R_rec_F = μ_F·F_i·h_Fi` | Falconer's domain is a plate over days. Ours is soil over seasons, where hyphae that are never mobilised must still turn over or `F_i` accumulates without bound — and `F_i` is the binder, so that would make aggregates permanent. |
+| **ζ and diffusion** | [2005] splits the *diffusive* gain of `b_n` into `b_i` as well; [2008] does not, and the two are not algebraically equivalent (§D2) | reaction term only, i.e. the [2008] form | `F_n`'s spatial spread is tip extension. Insulation is ageing in place, so carbon arriving by extension has not yet aged; splitting it would insulate biomass at the moment it arrives. |
+| **Conversion cost** | implicit in `(1−γ)`; the mobile equation's transition terms carry no `γ`, and respiration is never written as a flux (§5) | explicit `Resp_F_conv = (1−η)·\|net_i + net_n\|` on `S_Fm` | The carbon budget must close against a measured CO₂ series. An implicit loss cannot appear in the closure identity (§17a) or in the CO₂ prediction. The `abs()` makes mobilisation cost the same as immobilisation — ours, not Falconer's: he tracks no respiration at all. |
+
+The first two enlarge the model; the third makes an accounting term explicit that
+Falconer had no need to track. None is required by his equations and none
+contradicts them.
 
 ---
 
@@ -1431,8 +1444,12 @@ something.
 1. **Pointwise identity.** Evaluate `compute_source_terms` at a node and assert
    $|\sum_k S_k + \text{Resp}_\text{total}| \le 10^{-12}\times\text{scale}$.
    Exact, no integration, no solver, microseconds, and it localises a failure to
-   a node and a state. This is the primary test and **it does not yet exist** —
-   none of the current assertions check it.
+   a node and a state. This is the primary test. **It exists**: `test/test_closure.jl`
+   (added 2026-07-29), 21 assertions, including the load-bearing lemma
+   `softplus(x) − softplus(−x) = x` tested on its own across four ε and eleven x,
+   because any future replacement for softplus must satisfy it or the budget
+   breaks. *This paragraph said "it does not yet exist" until 2026-07-30 — it was
+   written before the file and never revisited.*
 
 2. **Split-solver balance error.** An integrated backstop. Weaker (diluted over
    the trajectory, and blinded by clipping) but it samples the states the
@@ -1444,14 +1461,35 @@ something.
    cross-check between two independent implementations, but it is not a closure
    test, and item 1 subsumes what it would tell you.
 
-### Why the split solver is kept
+### Why the split solver was kept — and why it is gone *(archived 2026-07-30)*
+
+The reasoning below stood until the 45-day agreement run. It does not survive
+that run: the reference implementation evaluates rate laws on negative arguments,
+folds its clipping into CO₂ without reporting it, lags its coefficients, and is
+first-order rather than the second-order its docstring claimed. Repairing all
+four would have produced a second well-converged discretisation whose
+distinguishing feature — the cheap, auditable CO₂ integration — the repairs
+destroy. `_archive/split_solver_20260730/README.md` has the full disposition.
+
+**Consequence, stated plainly: there is no integrated mass-balance measurement in
+the package today.** `test_closure.jl` still asserts the closure identity
+pointwise, which §17a ranks above the integrated check anyway — exact, no
+integration, and it localises a failure to a node and a state. The integrated
+companion returns when a version carrying cumulative respiration as an explicit
+state is written, as a separate test case. Carried per node, not as a global
+scalar: one CO₂ scalar makes the Jacobian row dense across every node and the
+sparse solve is already 33 % of runtime, while a per-node field keeps the
+block-tridiagonal structure and takes the block from 8×8 to 9×9.
+
+The superseded reasoning:
 
 Not for accuracy, not for speed, and not because it reproduced the MATLAB
 precursor. It is kept because it computes CO₂ independently and the stiff solver
 structurally cannot, so it carries test 2 — and because two independent
 implementations over shared physics are the only convergence evidence this model
-has. Once test 1 exists, test 2 becomes a redundancy rather than the only line
-of defence. The 2026-07-30 measurement below is what that convergence evidence
+has. Test 1 now exists, so test 2 is a redundancy rather than the only line of
+defence — but a redundancy over states the trajectory actually visits, which a
+hand-chosen unit test may not reach, so it is kept. The 2026-07-30 measurement below is what that convergence evidence
 currently amounts to.
 
 ### Measured agreement — 2026-07-30
@@ -1492,6 +1530,77 @@ solver is validated here; they are shown to describe the same model.
 not in the reported quantities. At the production floor `r_agg`, which feeds MWD,
 agrees to 3.6e-3, CO₂ to 2.2e-4 and POM to 6.4e-5. A single worst-field number
 would have hidden that, so the script now reports the observables separately.
+
+### 45 days — one field diverges, and it is DOC
+
+Same script, `verify_solver_agreement.jl 45`:
+
+| | C | B | F_n | F_m | F_i | E | M | O | P | CO₂ | r_agg |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| split `dt_min` 1e-4 | 3.2e-2 | 9.6e-2 | 2.5e-2 | 1.1e-1 | 3.7e-2 | 8.6e-2 | 4.5e-3 | 3.2e-4 | 1.7e-4 | 4.4e-4 | 7.7e-3 |
+| split `dt_min` 1e-5 | **9.2e-2** | 3.5e-3 | 3.0e-3 | 1.2e-2 | 5.1e-3 | 1.6e-3 | 5.2e-4 | 7.3e-5 | 6.8e-5 | 1.4e-4 | 7.7e-4 |
+
+Seven of eight gaps shrank hard on refinement — B by 28×, E by 53×, F_m by 9×.
+**C grew by 3×.**
+
+**What that licenses, and what it does not.** It says the split solver's DOC is
+not converging toward the stiff answer as its floor is refined. It says nothing
+about whether the stiff solver's DOC is right, because the instrument doing the
+disagreeing evaluates rate laws on negative arguments, books its clipping to CO₂
+without reporting it, and is first-order. A disagreement with an instrument like
+that is a fact about the instrument. Chasing it is what exposed those four
+defects and led to the split solver being archived (below).
+
+**The stiff solver at 45 days is therefore UNVERIFIED — not suspect.** There is
+no evidence either way, because the only thing that could have produced evidence
+turned out not to be fit for it. 22 days is likewise unverified, not supported:
+the earlier entry above says "supported", and that word was wrong for the same
+reason. Verification returns with the cumulative-respiration state, which makes
+the mass balance a measurement inside the production solver instead of borrowing
+one from a second integrator.
+
+**The De Gryze result is unaffected.** At 22 days C converges normally
+(3.2e-2 → 3.6e-3), the fitting window ends at 21, and even here the reported
+observables agree and improve on refinement: P 1.7e-4, CO₂ 4.4e-4, r_agg 7.7e-3.
+Split carbon balance −7.2e-13.
+
+**Three candidates, not ranked.** The two solvers differ by more than their
+integrator, and only some of those differences shrink when `dt_min` is refined:
+
+| | split | stiff | shrinks on refinement? |
+|---|---|---|---|
+| θ, D | from the start-of-step state | current state | **yes** |
+| reaction ↔ diffusion | Strang-split, sequential | coupled | **yes** |
+| negative pool | **zeroed, carbon credited to CO₂** | left negative | **no** |
+| rate-law arguments | the state | `max(u, 0)` clamped (`mol.jl:194-227`) | **no** |
+| CO₂ | integrated node-by-node | recovered by difference | **no** |
+
+1. **Clipping.** C is the pool most likely to be clipped at day 45 — DOC is
+   consumed, sits near zero, and Forward Euler overshoots negative there.
+   Refining removes the coefficient lag that was masking it, so a
+   clipping-dominated residual can *widen* as the lag goes away. This inverts the
+   usual reading of a diverging field and is why it is listed first.
+2. **The `max(u, 0)` asymmetry.** Split zeroes the state; stiff leaves the state
+   negative and clamps only the arguments to the rate laws. Two different
+   responses to the same event, and neither is "the model".
+3. **The stiff solver's absolute tolerance.** `abstol_scale = 1e-8` derives it
+   from the *initial* value — `abstol = max(1e-10, 1e-8·|u₀|)`. C starts at
+   ≈1.1e-2 after ω dilution; wherever it falls to ~1e-9 that tolerance is 10 % of
+   the value. The archived `bench_stiff.jl` flagged the mirror image for F_m,
+   which starts near zero and grows.
+
+**Not measurable today.** `clip_carbon` is computed in `reaction_step.jl:99-127`
+and folded into CO₂ but never reported, so the size of candidate 1 is unknown.
+`mol.jl` says "the difference between the two runs measures it", which is
+circular when that difference is what needs explaining. A `clipped_carbon`
+diagnostic on the split solver would separate 1 from 2 and 3 in one run.
+
+**Not concluded, and not to be quoted at 45 days.** 22 days is supported; 45 is
+not. What 22 days does *not* establish is that the same mechanism is absent
+there — only that it is smaller than the lag at that horizon.
+
+Wall clock at 45 days, both warm: stiff 2.3 s, split 40.0 s — **17×**, with
+416,011 split steps against 3,860,208 at the refined floor.
 
 Wall clock on that run, both warm: stiff 2.1 s, split 18.2 s — **8.7×**, against
 the 24× measured at 45 days. Not a discrepancy: it is the scaling in §20a showing

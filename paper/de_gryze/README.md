@@ -87,8 +87,9 @@ The CSVs are the deliverable — publication figures are built in R from them.
 The PNGs are diagnostic, produced from the same single run, so a figure and a
 score can never describe different parameter sets.
 
-Solver is set by `SOLVER_USED` — `:stiff` by default. `:split` is the reference
-implementation, ~24× slower; REFERENCE.md §20a says why both exist.
+There is one solver, `run_aggregate_stiff`. The Strang/Crank–Nicolson reference
+was archived 2026-07-30 — `_archive/split_solver_20260730/README.md` — so
+`SOLVER_USED` and the `solver=` argument are gone.
 
 Cost, measured 07-30 on this configuration: 1.16 s per aggregate at `n_grid=200`
 over 22 days (2341 accepted steps, 39 Jacobians), so ~12 s for all ten classes.

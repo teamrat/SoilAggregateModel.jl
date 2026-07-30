@@ -35,10 +35,6 @@ with_logger(ConsoleLogger(stderr, Logging.Warn)) do
             include("test_temperature.jl")
         end
 
-        @testset "Tridiagonal Solver" begin
-            include("test_tridiagonal.jl")
-        end
-
         @testset "Physics" begin
             include("test_physics.jl")
         end
@@ -57,18 +53,6 @@ with_logger(ConsoleLogger(stderr, Logging.Warn)) do
 
         @testset "POM Dissolution" begin
             include("test_pom.jl")
-        end
-
-        @testset "Crank-Nicolson Diffusion" begin
-            include("test_crank_nicolson.jl")
-        end
-
-        @testset "Reaction Step" begin
-            include("test_reactions.jl")
-        end
-
-        @testset "Time-stepping Integration" begin
-            include("test_timestepper.jl")
         end
 
         @testset "User API" begin
@@ -97,6 +81,10 @@ with_logger(ConsoleLogger(stderr, Logging.Warn)) do
 
         @testset "Carbon Closure" begin
             include("test_closure.jl")
+        end
+
+        @testset "Stiff Solver" begin
+            include("test_stiff.jl")
         end
     end
 end

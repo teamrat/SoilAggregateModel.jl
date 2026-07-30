@@ -57,12 +57,12 @@ quantity cannot fall between output times.
 They discretise space identically and share `compute_source_terms`, so a
 difference between them is a difference in time integration, coefficient
 lagging, or negativity clipping — see the header of `mol.jl`, which lists all
-three. Any comparison should be made against the split solver run at a `dt_min`
-small enough to be converged, not against its production settings.
+three. The split solver was archived on 2026-07-30 — see
+`_archive/split_solver_20260730/README.md` — so this is now the only integrator.
 """
 function run_aggregate_stiff(bio::BiologicalProperties, soil::SoilProperties,
                              T_func, ψ_func, O2_func, t_span;
-                             n_grid::Int = 200, r_0::Real = 0.1, r_max::Real = 2.0,
+                             n_grid::Int = N_GRID_DEFAULT, r_0::Real = 0.1, r_max::Real = 2.0,
                              initial_state = nothing,
                              ic::InitialConditions = InitialConditions(),
                              P_0::Union{Nothing,Real} = nothing,
@@ -79,11 +79,8 @@ function run_aggregate_stiff(bio::BiologicalProperties, soil::SoilProperties,
                              verbose::Bool = false)
 
     t_start, t_end = t_span
-    grid = GridInfo(n_grid, r_0, r_max)
-    env  = EnvironmentalDrivers(T_func, ψ_func, O2_func)
-
-    state = initial_state !== nothing ? deepcopy(initial_state) :
-            create_initial_state(n_grid, bio, soil, ic; P_0 = P_0, ω = ω)
+    grid, env, state = setup_run(n_grid, r_0, r_max, T_func, ψ_func, O2_func,
+                                 bio, soil, ic, initial_state, P_0, ω)
 
     if !(state.P_0 > 0.0)
         throw(ArgumentError(
@@ -124,7 +121,7 @@ function run_aggregate_stiff(bio::BiologicalProperties, soil::SoilProperties,
     at = abstol_scale === nothing ? abstol :
          [max(abstol, abstol_scale * abs(x)) for x in u0]
 
-    scheduled = isempty(output_times) ? Float64[] :
+    scheduled = isempty(output_times) ? default_output_times(t_start, t_end) :
                 sort(unique(Float64.(output_times)))
     filter!(x -> t_start <= x <= t_end, scheduled)
     isempty(scheduled) && (scheduled = Float64[t_start, t_end])

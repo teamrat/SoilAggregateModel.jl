@@ -80,7 +80,15 @@ end
     @test soil.ρ_b > 0.0
 
     # MAOC capacity
-    @test soil.M_max > 0.0
+    # M_max is NOT a field — it is maoc_capacity(soil) = k_ma·f_clay_silt·ρ_b.
+    # Asserting the absence matters: the field existed until 2026-07-29 and its
+    # 10.0 default silently overrode the texture formula (erratum 12).
+    @test !(:M_max in fieldnames(SoilProperties))
+    @test maoc_capacity(soil) > 0.0
+    @test maoc_capacity(soil) ≈ soil.k_ma * soil.f_clay_silt * soil.ρ_b
+    # Dimensionless mass fraction, so the identity closes in µg-C/mm³. A k_ma in
+    # mg-C/g would put this three orders out and every isotherm with it.
+    @test 0.01 < soil.k_ma < 0.2
     @test soil.k_L > 0.0
     @test 0.0 < soil.n_LF <= 1.0
     @test soil.k_ma > 0.0

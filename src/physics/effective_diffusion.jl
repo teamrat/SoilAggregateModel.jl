@@ -39,7 +39,7 @@ where:
 """
 function D_eff_DOC(D_DOC_w::Real, θ::Real, θ_s::Real, ρ_b::Real, k_d::Real)
     τ = tortuosity_millington_quirk(θ, θ_s)
-    retardation = θ / (θ + ρ_b * k_d)
+    retardation = θ / sorption_capacity(θ, ρ_b, k_d)
     D_DOC_w * τ * retardation
 end
 
@@ -189,73 +189,6 @@ function D_eff_oxygen(D_O2_w::Real, D_O2_a::Real, K_H::Real, θ::Real, θ_a::Rea
     D_O2_w * f_aq * τ_aq + D_O2_a * f_gas * τ_gas
 end
 
-"""
-    update_effective_diffusion!(workspace::Workspace, state::AggregateState,
-                                soil::SoilProperties,
-                                bio::BiologicalProperties, temp_cache::TemperatureCache)
-
-Update all effective diffusion coefficients in workspace (in-place).
-
-Computes D_C, D_B, D_Fn, D_Fm, D_O for all grid points.
-Called once per timestep after water content update.
-
-# Arguments
-- `workspace`: Workspace with θ, θ_a, D_C, D_B, D_Fn, D_Fm, D_O, f_T
-- `state`: AggregateState (needed for F_n, F_i → network-dependent D_Fm)
-- `soil`: SoilProperties
-- `bio`: BiologicalProperties (for D_Fn0, D_Fm0, F_n_min, F_i_min)
-- `temp_cache`: TemperatureCache with current temperature-dependent values
-
-# Returns
-- Nothing (modifies workspace.D_C, D_B, D_Fn, D_Fm, D_O in-place)
-
-# Notes
-- Requires θ and θ_a to be updated first (call update_water_content! before this)
-- Zero allocations (uses pre-allocated workspace arrays)
-- D_Fm is now spatially varying: depends on local hyphal network density (F_n + F_i)
-  Follows MATLAB: D_Fm_eff = D_Fm * (Fi+Fn)/(Fi+Fn + 10*(Fi_min+Fn_min))
-  See Falconer et al. (2005) for network-dependent transport principle.
-
-# Examples
-
-```julia
-# In timestepper
-T = env.T(t)
-update_temperature_cache!(ws.f_T, T, bio, soil)
-update_water_content!(ws.θ, ws.θ_a, ψ, state, soil)
-update_effective_diffusion!(ws, state, soil, bio, ws.f_T)
-# Now ws.D_C, D_B, D_Fn, D_Fm, D_O are ready for diffusion step
-```
-"""
-function update_effective_diffusion!(workspace::Workspace, state::AggregateState,
-                                     soil::SoilProperties,
-                                     bio::BiologicalProperties, temp_cache::TemperatureCache)
-    n = length(workspace.θ)
-
-    # Spatially varying diffusion coefficients
-    @inbounds for i in 1:n
-        θ_i = workspace.θ[i]
-        θ_a_i = workspace.θ_a[i]
-
-        # DOC with sorption retardation
-        workspace.D_C[i] = D_eff_DOC(temp_cache.D_DOC_w, θ_i, soil.θ_s,
-                                      soil.ρ_b, soil.k_d_eq)
-
-        # Bacteria (chemotaxis proportional to DOC gradient)
-        workspace.D_B[i] = D_eff_bacteria(workspace.D_C[i], soil.D_B_rel)
-
-        # Non-insulated fungi (hyphal extension)
-        workspace.D_Fn[i] = D_eff_fungi_noninsulated(bio.D_Fn0, temp_cache.f_fun,
-                                                       θ_i, soil.θ_s)
-
-        # Mobile fungi (network-dependent translocation)
-        workspace.D_Fm[i] = D_eff_fungi_mobile(bio.D_Fm0, temp_cache.f_fun,
-                                                state.F_n[i], state.F_i[i], bio.K_Fm_net)
-
-        # Oxygen (dual-phase: aqueous + gas)
-        workspace.D_O[i] = D_eff_oxygen(temp_cache.D_O2_w, temp_cache.D_O2_a,
-                                         temp_cache.K_H_O, θ_i, θ_a_i, soil.θ_s)
-    end
-
-    nothing
-end
+# `update_effective_diffusion!` was archived with the split solver on 2026-07-30.
+# It filled a `Workspace` in place; `mol_rhs!` calls the `D_eff_*` functions above
+# directly, per node, at the current state. See _archive/split_solver_20260730/.

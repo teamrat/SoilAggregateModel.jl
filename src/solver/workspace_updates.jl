@@ -48,7 +48,9 @@ function update_temperature_cache!(cache::TemperatureCache, T::Real,
     cache.D_O2_a = D_O2_air(T, soil.D_O2_a_ref, T_ref)
 
     # Mobile fungi: temperature-dependent translocation (uses Ea_F)
-    cache.D_Fm = D_fungal_translocation(T, bio.D_Fm0, bio.Ea_F, T_ref)
+    # No cache.D_Fm: the field was written every step and read by nothing.
+    # F_m diffusivity is network-dependent and built per node in
+    # mol_rhs! from bio.D_Fm0 · f_fun · network, per node.
 
     # === Henry's law constant for O₂ ===
     cache.K_H_O = K_H_O2(T)

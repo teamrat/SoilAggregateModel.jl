@@ -30,7 +30,7 @@ Vector of NamedTuples, each containing:
 # Examples
 ```julia
 # All output times
-result = run_aggregate(bio, soil, T, ψ, O2, (0.0, 30.0))
+result = run_aggregate_stiff(bio, soil, T, ψ, O2, (0.0, 30.0))
 profiles = radial_profiles(result)
 for prof in profiles
     plot(prof.r, prof.C, label="t=\$(prof.t)")

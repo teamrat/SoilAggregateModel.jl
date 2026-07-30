@@ -13,7 +13,7 @@ using Test
         ψ(t) = -10.0   # kPa
         O2(t) = 0.3    # μg/mm³
 
-        result = run_aggregate(bio, soil, T, ψ, O2, (0.0, 5.0); n_grid=20)
+        result = run_aggregate_stiff(bio, soil, T, ψ, O2, (0.0, 5.0); n_grid=20)
 
         @test result isa SimulationResult
 
@@ -58,7 +58,7 @@ using Test
         ψ(t) = -10.0
         O2(t) = 0.3
 
-        result = run_aggregate(bio, soil, T, ψ, O2, (0.0, 1.0); n_grid=15)
+        result = run_aggregate_stiff(bio, soil, T, ψ, O2, (0.0, 1.0); n_grid=15)
 
         # Parameters preserved
         @test result.params isa ParameterSet
@@ -76,7 +76,7 @@ using Test
         ψ(t) = -10.0
         O2(t) = 0.3
 
-        result = run_aggregate(bio, soil, T, ψ, O2, (0.0, 5.0); n_grid=20)
+        result = run_aggregate_stiff(bio, soil, T, ψ, O2, (0.0, 5.0); n_grid=20)
 
         # Outputs
         @test result.outputs isa Vector{OutputRecord}
@@ -107,12 +107,12 @@ using Test
         O2(t) = 0.3
 
         # Coarse grid
-        result_10 = run_aggregate(bio, soil, T, ψ, O2, (0.0, 1.0); n_grid=10)
+        result_10 = run_aggregate_stiff(bio, soil, T, ψ, O2, (0.0, 1.0); n_grid=10)
         @test result_10.grid.n == 10
         @test length(result_10.grid.W) == 10
 
         # Fine grid
-        result_50 = run_aggregate(bio, soil, T, ψ, O2, (0.0, 1.0); n_grid=50)
+        result_50 = run_aggregate_stiff(bio, soil, T, ψ, O2, (0.0, 1.0); n_grid=50)
         @test result_50.grid.n == 50
         @test length(result_50.grid.W) == 50
 
@@ -129,7 +129,7 @@ using Test
         O2(t) = 0.3
 
         # Custom r_0 and r_max
-        result = run_aggregate(bio, soil, T, ψ, O2, (0.0, 1.0);
+        result = run_aggregate_stiff(bio, soil, T, ψ, O2, (0.0, 1.0);
                               n_grid=25, r_0=0.05, r_max=3.0)
 
         @test result.grid.r_0 ≈ 0.05

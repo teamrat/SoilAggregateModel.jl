@@ -66,7 +66,7 @@ Uses conservation weights grid.W[i] = 4πr²h (precomputed in GridInfo).
 
 # Example
 ```julia
-result = run_aggregate(bio, soil, T, ψ, O2, (0.0, 30.0))
+result = run_aggregate_stiff(bio, soil, T, ψ, O2, (0.0, 30.0))
 pools = integrated_pools(result)
 plot(pools.t, pools.C_total, label="Total DOC")
 plot!(pools.t, pools.C_agg, label="Aggregate DOC")
@@ -229,7 +229,7 @@ NamedTuple with:
 
 # Example
 ```julia
-result = run_aggregate(bio, soil, T, ψ, O2, (0.0, 30.0))
+result = run_aggregate_stiff(bio, soil, T, ψ, O2, (0.0, 30.0))
 bal = carbon_balance_table(result)
 @assert all(abs.(bal.relative_error) .< 1e-12)
 ```

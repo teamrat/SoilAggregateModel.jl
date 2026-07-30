@@ -128,7 +128,7 @@ import SoilAggregateModel: mol_sid, mol_iP, mol_neq, MOL_NSP,
         grid = GridInfo(n, r_0, 5.0)
         bio  = BiologicalProperties()
         soil = SoilProperties()
-        ic   = InitialConditions(SOC = 0.02, s_M = 0.5)
+        ic   = InitialConditions(SOC = 0.02)
 
         st = create_initial_state(n, bio, soil, ic; P_0 = 10.0, ω = 1.0)
         u0 = state_to_vector(st)

@@ -25,13 +25,13 @@ Usage:
 """
 
 using Pkg
-Pkg.activate(joinpath(@__DIR__, "..", ".."))
+Pkg.activate(joinpath(@__DIR__, "..", "..", ".."))
 
 using SoilAggregateModel
 using Printf
 const SAM = SoilAggregateModel
 
-include(joinpath(@__DIR__, "degryze_soils.jl"))
+include(joinpath(@__DIR__, "..", "degryze_soils.jl"))
 
 const SOIL_ID = 3
 const DIAM    = 1.25
@@ -39,7 +39,7 @@ const N_GRID  = 200
 const T_END   = 45.0
 
 soil = degryze_soil(SOIL_ID; k_L = 1000, D_B_rel = 0.00001)
-ic   = degryze_ic(SOIL_ID, soil; s_M = 0.6)
+ic   = degryze_ic(SOIL_ID, soil)
 
 bio = BiologicalProperties(
     κ_s_ref = 0.01, κ_d_ref = 0.001,

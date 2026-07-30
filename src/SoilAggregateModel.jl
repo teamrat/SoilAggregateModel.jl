@@ -9,7 +9,7 @@ shared set of physics functions:
 
 - [`run_aggregate_stiff`](@ref) — **default.** Method of lines, implicit stiff
   solver, sparse Jacobian. 45 days in 1.6 s / 2088 steps.
-- [`run_aggregate`](@ref) — reference implementation. Strang splitting,
+- ARCHIVED 2026-07-30: `run_aggregate`, the Strang-splitting reference,
   Crank-Nicolson diffusion, Forward Euler reactions. 45 days in 38 s / 391773
   steps, because the explicit reaction bounds the step by stability rather than
   accuracy. Kept as a cross-check and for its independent carbon-closure probe.
@@ -64,14 +64,8 @@ include("biology/maoc.jl")
 include("carbon/pom_dissolution.jl")
 
 # Solver
-include("solver/tridiagonal.jl")
-include("solver/crank_nicolson.jl")
-include("solver/finite_volumes.jl")
 include("solver/reactions.jl")
-include("solver/diffusion_step.jl")
-include("solver/reaction_step.jl")
 include("solver/workspace_updates.jl")
-include("solver/timestepper.jl")
 include("solver/mol.jl")
 include("solver/mol_solve.jl")
 
@@ -92,7 +86,8 @@ export InitialConditions
 export AggregateState, OutputRecord
 export GridInfo, ParameterSet, SimulationResult, IntegratedPools
 export conservation_weight, conservation_weights
-export run_aggregate, run_aggregate_stiff, mol_jacobian_prototype
+export run_aggregate_stiff, mol_jacobian_prototype
+export create_initial_state, EnvironmentalDrivers, N_GRID_DEFAULT, default_output_times
 export FBDF, KenCarp47, KLUFactorization
 export sauter_mean_diameter, sauter_from_texture, TEXTURE_CLASS_DIAMETERS
 export domain_tessellation, pom_population, log_interpolate_fraction

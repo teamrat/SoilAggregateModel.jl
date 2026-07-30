@@ -36,8 +36,9 @@ const R_GAS = 8.314
 # 0.32 % — which is why ambient gas-phase O₂ existed as five different numbers.
 # 101325 is the definition. Adopting it moved `O2_CONST` in degryze_config.jl
 # from 0.273808 to 0.274689, so runs before 2026-07-30 differ in the last
-# digits. `optimize_soil3.jl` and the four `diagnostics/` scripts still carry
-# the old literals and so are now 0.32 % off from the production config.
+# digits. The scripts that still carried the old literals were archived on
+# 2026-07-30 (`paper/_archive/degryze_tooling_20260730/`), so this is now the
+# only definition anywhere that runs.
 const P_ATM = 101325.0
 const M_O2  = 0.032
 
@@ -50,6 +51,13 @@ const M_O2  = 0.032
 # µg-C/mm³ ONLY if k_ma is a mass fraction; with the "µg-C per gram" unit the
 # package carried until 2026-07-29 the identity is short by 1e6. See
 # REFERENCE.md §26 erratum 12.
+# Radial nodes, default for BOTH entry points. They disagreed until 2026-07-30 —
+# `run_aggregate` defaulted to 50 and `run_aggregate_stiff` to 200, so the same
+# call resolved to a different grid depending on which solver ran. 200 is the
+# production value; every call in `paper/` and `test/` passes `n_grid` explicitly,
+# so this default governs casual use only.
+const N_GRID_DEFAULT = 200
+
 const K_MA_HIGH_ACTIVITY = 0.086
 const K_MA_LOW_ACTIVITY  = 0.048
 

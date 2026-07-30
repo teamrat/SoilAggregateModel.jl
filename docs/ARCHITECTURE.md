@@ -1,3 +1,8 @@
+> **2026-07-30: this document also describes the archived split solver
+> throughout.** Strang splitting, Crank–Nicolson, `Workspace`, `run_simulation`
+> and the timestepper are in `_archive/split_solver_20260730/`. That compounds
+> the staleness already noted; see BACKLOG item 12 for rewrite-or-retire.
+
 # Soil Aggregate Model v2 — Implementation Architecture
 
 **Status**: Final — authoritative guide for implementation  

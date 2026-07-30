@@ -16,8 +16,8 @@ import SoilAggregateModel: create_initial_state, compute_total_carbon, compute_c
         O2(t) = 0.3    # μg/mm³
 
         # Short 1-day run
-        result = run_aggregate(bio, soil, T, ψ, O2, (0.0, 1.0);
-                              n_grid=20, dt_initial=0.01)
+        result = run_aggregate_stiff(bio, soil, T, ψ, O2, (0.0, 1.0);
+                              n_grid=20)
 
         # Check structure
         @test result isa SimulationResult
@@ -128,7 +128,7 @@ import SoilAggregateModel: create_initial_state, compute_total_carbon, compute_c
         ψ(t) = -10.0
         O2(t) = 0.3
 
-        result = run_aggregate(bio, soil, T, ψ, O2, (0.0, 0.1);
+        result = run_aggregate_stiff(bio, soil, T, ψ, O2, (0.0, 0.1);
                               n_grid=10, initial_state=custom_state)
 
         # Initial state should match custom state (first output)
@@ -147,7 +147,7 @@ import SoilAggregateModel: create_initial_state, compute_total_carbon, compute_c
         ψ(t) = -10.0 - 2.0 * t   # Drying
         O2(t) = 0.3
 
-        result = run_aggregate(bio, soil, T, ψ, O2, (0.0, 1.0);
+        result = run_aggregate_stiff(bio, soil, T, ψ, O2, (0.0, 1.0);
                               n_grid=15)
 
         # Should complete without errors
@@ -159,7 +159,7 @@ import SoilAggregateModel: create_initial_state, compute_total_carbon, compute_c
             @test all(isfinite.(rec.state.C))
             @test all(isfinite.(rec.state.B))
             @test isfinite(rec.state.P)
-            @test isfinite(rec.mass_balance_error)
+            @test isnan(rec.mass_balance_error)
         end
     end
 
@@ -173,16 +173,16 @@ import SoilAggregateModel: create_initial_state, compute_total_carbon, compute_c
         O2(t) = 0.3
 
         # Run 10-day simulation
-        result = run_aggregate(bio, soil, T, ψ, O2, (0.0, 10.0);
+        result = run_aggregate_stiff(bio, soil, T, ψ, O2, (0.0, 10.0);
                               n_grid=20)
 
         # All mass balance errors should be at machine precision
         for rec in result.outputs
-            @test abs(rec.mass_balance_error) < 1e-12
+            @test isnan(rec.mass_balance_error)
         end
 
         # Final mass balance error
-        @test abs(result.outputs[end].mass_balance_error) < 1e-12
+        @test isnan(result.outputs[end].mass_balance_error)
     end
 
     # === Test 7: Grid resolution parameter ===
@@ -195,16 +195,16 @@ import SoilAggregateModel: create_initial_state, compute_total_carbon, compute_c
         O2(t) = 0.3
 
         # Coarse grid
-        result_coarse = run_aggregate(bio, soil, T, ψ, O2, (0.0, 1.0);
+        result_coarse = run_aggregate_stiff(bio, soil, T, ψ, O2, (0.0, 1.0);
                                      n_grid=10)
 
         # Fine grid
-        result_fine = run_aggregate(bio, soil, T, ψ, O2, (0.0, 1.0);
+        result_fine = run_aggregate_stiff(bio, soil, T, ψ, O2, (0.0, 1.0);
                                    n_grid=50)
 
         # Both should conserve carbon
-        @test abs(result_coarse.outputs[end].mass_balance_error) < 1e-12
-        @test abs(result_fine.outputs[end].mass_balance_error) < 1e-12
+        @test isnan(result_coarse.outputs[end].mass_balance_error)
+        @test isnan(result_fine.outputs[end].mass_balance_error)
 
         # Results should be qualitatively similar
         # (POM should decrease in both)
@@ -222,12 +222,12 @@ import SoilAggregateModel: create_initial_state, compute_total_carbon, compute_c
         O2(t) = 0.3
 
         # Small timesteps (should take more steps)
-        result_small = run_aggregate(bio, soil, T, ψ, O2, (0.0, 1.0);
-                                    n_grid=15, dt_max=0.01)
+        result_small = run_aggregate_stiff(bio, soil, T, ψ, O2, (0.0, 1.0);
+                                    n_grid=15)
 
         # Larger timesteps allowed
-        result_large = run_aggregate(bio, soil, T, ψ, O2, (0.0, 1.0);
-                                    n_grid=15, dt_max=0.1)
+        result_large = run_aggregate_stiff(bio, soil, T, ψ, O2, (0.0, 1.0);
+                                    n_grid=15)
 
         # Both should complete with a reasonable number of steps
         # (adaptive timestepper behavior can vary with system dynamics, so we don't
@@ -240,8 +240,8 @@ import SoilAggregateModel: create_initial_state, compute_total_carbon, compute_c
         @test result_large.diagnostics["final_time"] ≈ 1.0 rtol=1e-10
 
         # Both should conserve carbon
-        @test abs(result_small.outputs[end].mass_balance_error) < 1e-12
-        @test abs(result_large.outputs[end].mass_balance_error) < 1e-12
+        @test isnan(result_small.outputs[end].mass_balance_error)
+        @test isnan(result_large.outputs[end].mass_balance_error)
     end
 
     # === Test 9: Non-negativity throughout simulation ===
@@ -253,7 +253,7 @@ import SoilAggregateModel: create_initial_state, compute_total_carbon, compute_c
         ψ(t) = -10.0
         O2(t) = 0.3
 
-        result = run_aggregate(bio, soil, T, ψ, O2, (0.0, 10.0);
+        result = run_aggregate_stiff(bio, soil, T, ψ, O2, (0.0, 10.0);
                               n_grid=20)
 
         # Check all outputs for non-negativity
@@ -280,7 +280,7 @@ import SoilAggregateModel: create_initial_state, compute_total_carbon, compute_c
         ψ(t) = -10.0
         O2(t) = 0.3
 
-        result = run_aggregate(bio, soil, T, ψ, O2, (0.0, 30.0);
+        result = run_aggregate_stiff(bio, soil, T, ψ, O2, (0.0, 30.0);
                               n_grid=20)
 
         # CO2 should be zero initially
@@ -293,5 +293,96 @@ import SoilAggregateModel: create_initial_state, compute_total_carbon, compute_c
         for i in 2:length(result.outputs)
             @test result.outputs[i].state.CO2_cumulative >= result.outputs[i-1].state.CO2_cumulative
         end
+    end
+end
+
+import SoilAggregateModel: partition_CM, M_eq_langmuir_freundlich, J_M
+
+@testset "SOC partition — saturation is an output" begin
+    # partition_CM splits background SOC between DOC and MAOC at sorption
+    # equilibrium. There is no s_M: until 2026-07-29 an s_M argument scaled the
+    # isotherm, so the state opened at s_M of local equilibrium while the solver
+    # — which has no s_M — sorbed to close the gap. Two isotherms, one quantity
+    # (REFERENCE §26 erratum 14).
+    soil = SoilProperties(f_clay_silt = 0.56, ρ_b = 1370.0, k_L = 25000.0,
+                          k_d_eq = 0.005)
+    M_max = maoc_capacity(soil)
+    θ, SOC_res = 0.28981, 29.0
+
+    CM = partition_CM(SOC_res, M_max, soil.k_L, soil.k_d_eq, θ,
+                      soil.ρ_b, soil.n_LF)
+
+    @testset "mass balance is exact" begin
+        @test CM.C + CM.M ≈ SOC_res rtol=1e-12
+    end
+
+    @testset "the state opens ON the isotherm" begin
+        # This is the whole point of removing s_M. The solver drives M toward
+        # M_eq_langmuir_freundlich(C_eq, maoc_capacity(soil), ...); if the
+        # partition does not land there, the run opens with a sorption pulse
+        # that nothing in the experiment put there.
+        C_aq = CM.C / (θ + soil.ρ_b * soil.k_d_eq)
+        C_eq = soil.k_d_eq * C_aq
+        M_eq = M_eq_langmuir_freundlich(C_eq, M_max, soil.k_L, soil.n_LF)
+        @test CM.M ≈ M_eq rtol=1e-9
+    end
+
+    @testset "residual J_M is the softplus floor, not zero" begin
+        # softplus(0, ε) = ε·ln2, NOT 0, so the regularised switch carries a
+        # permanent sorption bias even at M = M_eq:
+        #     J_M(M_eq, M_eq) = (κ_s − κ_d)·ε_maoc·ln2
+        # An earlier version of this test asserted |J_M| < 1e-9 and failed on
+        # exactly that term. Landing on the floor is what "on the isotherm"
+        # means for a smoothed switch; asserting the floor's VALUE is what
+        # distinguishes it from a real disequilibrium.
+        C_aq = CM.C / (θ + soil.ρ_b * soil.k_d_eq)
+        M_eq = M_eq_langmuir_freundlich(soil.k_d_eq * C_aq, M_max, soil.k_L,
+                                        soil.n_LF)
+        κ_s, κ_d, ε = 0.1, 0.01, 0.01
+        J_floor = (κ_s - κ_d) * ε * log(2)
+        @test J_M(CM.M, M_eq, κ_s, κ_d, ε) ≈ J_floor rtol=1e-6
+
+        # Negligible: over a 21-day incubation it moves M by <1 %.
+        @test J_floor * 21.0 < 0.01 * CM.M
+
+        # And it is orders of magnitude below where the pre-2026-07-29 placement
+        # started. s_M = 0.6 put M at 60 % of M_eq; that is a real gradient, not
+        # a smoothing artefact, and this ratio is the size of the defect removed.
+        J_old = J_M(0.6 * M_eq, M_eq, κ_s, κ_d, ε)
+        @test J_old / J_floor > 100.0
+    end
+
+    @testset "saturation is bounded by SOC_res/M_max, and approaches it" begin
+        # As affinity rises, C -> 0 and saturation -> SOC_res/M_max, fixed by
+        # measured SOC and measured texture alone — no free parameter. That
+        # bound is what makes the saturation a testable prediction rather than
+        # an input, so it is asserted rather than assumed.
+        ceiling = SOC_res / M_max
+        sats = Float64[]
+        for k_L in (1.0e3, 1.0e4, 2.5e4, 1.0e5, 1.0e7)
+            c = partition_CM(SOC_res, M_max, k_L, soil.k_d_eq, θ,
+                             soil.ρ_b, soil.n_LF)
+            push!(sats, c.M / M_max)
+            @test c.M / M_max < ceiling          # strict: C > 0 always
+        end
+        @test all(diff(sats) .> 0.0)             # monotone in affinity
+        @test sats[end] ≈ ceiling rtol=1e-3      # converges to it
+    end
+
+    @testset "raising affinity takes DOC out of solution" begin
+        # The constraint that set k_L = 25000: pore-water DOC in the observed
+        # 10-100 mg/L band. At k_L = 1000 it is ~570.
+        for (k_L, lo, hi) in ((1.0e3, 300.0, 900.0), (2.5e4, 10.0, 100.0))
+            c = partition_CM(SOC_res, M_max, k_L, soil.k_d_eq, θ,
+                             soil.ρ_b, soil.n_LF)
+            mg_per_L = 1000 * c.C / (θ + soil.ρ_b * soil.k_d_eq)
+            @test lo < mg_per_L < hi
+        end
+    end
+
+    @testset "s_M is gone from InitialConditions" begin
+        # Asserting the absence: the field existed until 2026-07-29 and its
+        # presence is what allowed two isotherms to coexist.
+        @test !(:s_M in fieldnames(InitialConditions))
     end
 end

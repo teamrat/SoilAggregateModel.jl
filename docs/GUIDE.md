@@ -300,7 +300,13 @@ P(0) = P(t) + ∫(C+B+F_i+F_n+F_m+E+M)·4πr²dr + CO₂_cumulative
 
 # Part II: Numerical Method
 
-## 14. Strang Splitting
+## 14. Strang Splitting — ARCHIVED
+
+> **This section and §15 describe the split solver, archived 2026-07-30.** They
+> are retained because the discretisation they document is the one the current
+> Laplacian was written against, not because either is live code. See
+> `_archive/split_solver_20260730/README.md`.
+
 
 The operator splitting is:
 

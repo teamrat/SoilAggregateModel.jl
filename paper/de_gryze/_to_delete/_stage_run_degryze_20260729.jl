@@ -3,39 +3,27 @@ De Gryze et al. (2006) Forward Simulation
 ==========================================
 European Journal of Soil Science, April 2006, 57, 235–246
 
-One forward run of the population, and every diagnostic that comes from it.
-
+Replicates the MATLAB `de_gryze_test.m` simulation:
   - Sweep over 5 POM diameter classes (0.5 → 2.0 mm, 0.3 mm bins)
-  - Constant environment: T, ψ and O₂ from the incubation (degryze_config.jl)
-  - 22 days (data extends to day 21)
+  - Constant environment: ψ = -29 kPa (field capacity), T = 20°C, 21% O₂
+  - 60-day simulation (data extends to day 21; extra time for post-peak dynamics)
+  - Single particle diameter d_p = 30 µm
 
 Each POM diameter produces one aggregate lifecycle. Together they represent a
 population whose mean weight diameter (MWD) and cumulative CO₂ can be compared
-with the incubation data.
+with incubation data from 5 soils.
 
-Configuration is NOT defined here. Soil, initial condition, parameters, POM
-distribution, environment and domain tessellation all live in
-`degryze_config.jl`. Nothing else defines a configuration for this problem:
-the tooling that used to keep its own copies was archived on 2026-07-30
-(`paper/_archive/degryze_tooling_20260730/`), so this run is the only consumer
-(CLAUDE.md §8).
-
-Output:
+Output structure:
   output/
-    summary.csv                — diameter × time → r_agg, pools, CO₂
-    spatial_profiles.csv       — diameter × time × node → all 8 fields,
-                                 plus binder and the two thresholds
-    population.csv             — population MWD, CO₂, size classes
-    degryze_model_vs_data.png  — 5 panels, model against measurements
-    degryze_profiles_d<D>mm.png — 9 panels per POM class, fields vs radius
-
-The CSVs are the deliverable; the PNGs are diagnostic (publication figures are
-built in R from the CSVs).
+    summary.csv           — combined table: diameter × time → aggregate_D, cum_CO2, pools
+    population.csv        — population-weighted MWD, CO₂, WAS
 
 MATLAB correspondence:
   de_gryze_test.m         → this script (driver)
-  param.m                 → degryze_config.jl
-  single_aggregate_beta.m → run_aggregate_stiff()
+  param.m                 → BiologicalProperties() + SoilProperties() defaults
+  single_aggregate_beta.m → run_aggregate()
+
+Domain tessellation: see domain_tessellation_supplemental.md
 """
 
 ## ============================================================
@@ -49,35 +37,115 @@ using SoilAggregateModel
 using DataFrames
 using CSV
 using Distributions
-using Printf
 
 # Postprocessing utilities (kept outside the package to avoid DataFrames dependency)
 include(joinpath(@__DIR__, "postprocess_dataframe.jl"))
-
-# THE configuration. Also brings in degryze_soils.jl.
-include(joinpath(@__DIR__, "degryze_config.jl"))
+include(joinpath(@__DIR__, "degryze_soils.jl"))
 
 println("="^72)
 println("De Gryze et al. (2006) — Forward Simulation")
 println("="^72)
 println()
 
-# Lowercase aliases, so the printing and plotting below read as before.
-soil, ic, bio    = SOIL, IC, BIO
-diam_all, f_POM  = DIAM_ALL, F_POM
-tess, pop        = TESS, POP
-ω, domain_factor = OMEGA, DOMAIN_FACTOR
-t_max, n_grid, dt_output = T_MAX, N_GRID, DT_OUTPUT
-T_func, ψ_func, O2_func    = T_FUNC, PSI_FUNC, O2_FUNC
-T_const, ψ_const, O2_const = T_CONST, PSI_CONST, O2_CONST
-I_input, ρ_bulk, soil_V    = I_INPUT, ρ_BULK, SOIL_V
-soil_mass_per_L  = SOIL_MASS_PER_L
-φ_POM, f_pack, f_domain = TESS.φ_POM, TESS.f_pack, TESS.f_domain
-N_POM            = POP.N_POM
-P_0_per_particle = P_0_PER_PARTICLE
-total_POM_C      = TOTAL_POM_C
-C_input_vol      = I_INPUT * ρ_BULK
-POM_mean, POM_sigma = POM_MEAN, POM_SIGMA
+## ============================================================
+## POM Size Distribution
+## ============================================================
+#
+# De Gryze: wheat stems cut to 0.5–2.0 mm pieces.
+# Assume Normal distribution: µ = 1.25 mm, σ = 0.23 mm
+# 5 bins of 0.3 mm width spanning 0.5–2.0 mm.
+# Bin edges and midpoints all in [mm].
+#
+POM_mean  = 1.25     # mm
+POM_sigma = 0.23     # mm
+
+bin_edges = collect(0.5:0.3:2.0)   # [0.5, 0.8, 1.1, 1.4, 1.7, 2.0] mm
+diam_all  = [(bin_edges[i] + bin_edges[i+1]) / 2.0 for i in 1:length(bin_edges)-1]
+# diam_all = [0.65, 0.95, 1.25, 1.55, 1.85] mm
+
+F_POM = cdf.(Normal(POM_mean, POM_sigma), bin_edges)
+f_POM = diff(F_POM)
+# RENORMALISE. The Normal is truncated at the 0.5 and 2.0 mm bin edges, so the
+# raw bin fractions sum to 0.99889, not 1. That 0.11 % shortfall propagated
+# straight through pom_population and was the entire residual in
+# "Total POM input 4425.1 vs expected 4430" (4430 x 0.99889 = 4425.1).
+# The amendment identity in src/physics/tessellation.jl is exact only for a
+# normalised distribution.
+f_POM ./= sum(f_POM)
+
+# Particle diameter for aggregation stability [µm]
+particle_D = 30.0  # µm
+
+## ============================================================
+## Soil and initial conditions  (must precede the tessellation)
+## ============================================================
+# Which of the five soils this run represents. Soil 3 (loam) is the mid-texture
+# case; the paper's own conclusion is that soil 5 crosses a ~15 % clay threshold
+# and behaves differently (p. 242).
+SOIL_ID = 3
+
+# Soil and initial conditions come from degryze_soils.jl, which overrides ONLY
+# the fields De Gryze measures (ρ_b, f_clay_silt, θ_s; SOC, T_0, ψ_0) and leaves
+# every other package default alone. Overrides below are run choices, not
+# measurements — see docs/REFERENCE.md §5a for their standing.
+soil = degryze_soil(SOIL_ID;
+                    k_L     = 1000,
+                    D_B_rel = 0.00001)   # §5a Group B: cited value is 0.01 (Wu 2006)
+
+ic = degryze_ic(SOIL_ID, soil; s_M = 0.6)
+
+
+## ============================================================
+## Environmental Conditions (constant)
+## ============================================================
+# T and ψ are NOT free choices here: T is the incubation temperature and ψ is
+# derived from 60 % WFPS for this soil's porosity (degryze_soils.jl).
+
+T_const    = ic.T_0        # 298.15 K = 25 °C, De Gryze 2006 p.237
+ψ_const    = ic.ψ_0        # from 60 % WFPS via the model's retention curve
+O2_frac    = DEGRYZE_INCUBATION.O2_frac
+M_O2       = 0.032    # kg/mol
+P_atm      = 101000.0 # Pa
+R_gas      = 8.314    # J/mol/K
+O2_const   = O2_frac * P_atm * M_O2 / (R_gas * T_const)  # µg/mm³
+
+T_func  = t -> T_const
+ψ_func  = t -> ψ_const
+O2_func = t -> O2_const
+
+## ============================================================
+## Time and Grid
+## ============================================================
+
+t_max      = 45.0    # days
+dt_output  = 0.125   # output every 3 hours
+n_grid     = 200     # radial grid points per aggregate
+
+## ============================================================
+## Domain tessellation and population — measured inputs only
+## ============================================================
+# De Gryze 2006 p.236-237: 1.5 g wheat stems per 150 g soil (= 10 g/kg),
+# stems 44.3 % C  ->  4.43 g-C/kg-soil.  All densities µg/mm³ (= kg/m³).
+# The geometry itself lives in src/physics/tessellation.jl.
+ρ_POM   = 200.0      # POM carbon density [µg-C/mm³]
+I_input = 4.43e-3    # amendment rate [µg-C/µg-soil]
+ρ_bulk  = soil.ρ_b   # Table 1 bulk density for this soil [µg/mm³]
+soil_V  = 100.0^3    # reference soil volume [mm³] = 1 litre
+
+# Domain geometry, overlap correction and particle counts — src/physics/tessellation.jl
+tess = domain_tessellation(ρ_POM=ρ_POM, I_input=I_input, ρ_b=ρ_bulk)
+pop  = pom_population(diam_all, f_POM, tess; ρ_POM=ρ_POM, soil_volume_mm3=soil_V)
+
+C_input_vol   = I_input * ρ_bulk
+φ_POM         = tess.φ_POM
+f_pack        = tess.f_pack
+f_domain      = tess.f_domain
+ω             = tess.ω
+domain_factor = tess.f_domain
+
+N_POM            = pop.N_POM
+P_0_per_particle = pop.P_0_per_particle
+total_POM_C      = pop.total_POM_C
 
 ## ============================================================
 ## Print configuration
@@ -91,26 +159,20 @@ println("  Environment: T=$(T_const)K, ψ=$(ψ_const) kPa, O₂=$(round(O2_const
 println("  Duration: $(t_max) days, output every $(dt_output) days")
 println("  Grid: $(n_grid) nodes per aggregate")
 println()
-# Stability threshold actually in force this run. A run whose threshold is not
-# the one intended is otherwise indistinguishable from a correct one. Both
-# quantities come from src/postprocessing/aggregate_radius.jl, which is where
-# the model itself gets them.
-const HYDRO = wet_sieving_stress()
-const G_REF = critical_binding(soil)          # the value at r = δ_s
-
+# Stability threshold actually in force this run. G_c = τ_w·d_32/κ_b sets the
+# binding concentration an aggregate must reach, so print it: a run whose
+# threshold is not the one intended is otherwise indistinguishable from a
+# correct one.
 println("Aggregate stability:")
 println("  d_32 (Sauter mean): $(round(soil.d_32*1000, digits=3)) µm")
 println("  κ_b: $(soil.κ_b) Pa·mm/(µg/mm³),  w_E: $(soil.w_E)")
-println("  τ_w: $(round(HYDRO.τ_w, sigdigits=5)) Pa,  δ_s: $(round(HYDRO.δ_s, digits=4)) mm")
-println("  G_c(δ_s) = τ_w·d_32/κ_b = $(round(G_REF, sigdigits=7)) µg/mm³")
-println("       (legacy value for this soil, κ_b = 0.0143869: 0.0194084)")
-println("  p_Gc = $(soil.p_Gc)   →  G_c(r) = G_c(δ_s)·(r/δ_s)^p_Gc")
-if soil.p_Gc == 0.0
-    println("       threshold is FLAT in r — a 2 mm aggregate faces the same one as 0.1 mm")
-else
-    println("       at r = $(round(DIAM_ALL[1]/2, digits=3)) mm: $(round(critical_binding(soil, DIAM_ALL[1]/2), sigdigits=5))   " *
-            "at r = $(round(DIAM_ALL[end]*DOMAIN_FACTOR/2, digits=3)) mm: " *
-            "$(round(critical_binding(soil, DIAM_ALL[end]*DOMAIN_FACTOR/2), sigdigits=5)) µg/mm³")
+let L_s = 13.0, f_s = 34.0/60.0, μ = 1.002e-3, ν_w = 1.004
+    v_s = π * f_s * L_s
+    δ_s = sqrt(2.0 * ν_w / (2π * f_s))
+    τ_w = sqrt(2.0) * μ * (v_s * 1e-3) / (δ_s * 1e-3)
+    println("  τ_w: $(round(τ_w, sigdigits=5)) Pa,  δ_s: $(round(δ_s, digits=4)) mm")
+    println("  G_c = τ_w·d_32/κ_b = $(round(τ_w * soil.d_32 / soil.κ_b, sigdigits=7)) µg/mm³")
+    println("       (pre-2026-07-28 value for this soil: 0.0194084)")
 end
 println()
 
@@ -122,8 +184,45 @@ println("  Packing factor: $(round(f_pack, sigdigits=4)). Selected domain factor
 println("  Overlap ω = $(round(ω, sigdigits=4))")
 println("  Total POM particles: $(round(sum(N_POM), sigdigits=4)) per liter soil")
 println("  Total POM carbon: $(round(total_POM_C, sigdigits=4)) µg-C per liter soil")
-println("  Total POM carbon: $(round(total_POM_C / soil_mass_per_L, sigdigits=4)) µg-C per g-soil")
+println("  Total POM carbon: $(round(total_POM_C / (soil_V * ρ_bulk * 1e-6) , sigdigits=4)) µg-C per g-soil")
 println()
+
+## ============================================================
+## Parameters
+## ============================================================
+
+bio  = BiologicalProperties(
+    #MAOC
+    κ_s_ref = 0.01,
+    κ_d_ref = 0.001,
+
+    #FUNGI MINIMUMS
+    F_i_min = 1e-6,
+    F_n_min = 2e-4,
+    F_m_min = 1e-6,
+
+    #TRANSPORT
+    D_Fn0   = 0.00001,
+    D_Fm0   = 0.001,
+
+    #MAXIMUM UPTAKE RATE 
+    r_B_max = 8.0,
+    r_F_max = 0.2,
+    # Sensitivity setting, not a calibrated value: probing whether the CO2
+    # overshoot and the too-fast MWD rise share a cause in POM supply rate.
+    # optimized_params_soil3.txt was fitted against the broken POM
+    # normalization and must be re-fitted, not reused.
+    R_P_max = 2.5,
+    Y_B_max = 0.4,
+    B_S = 0.05,
+
+    C_B = 5.0e-5, 
+
+    #DEATH RATE
+    μ_B = 0.0036,
+    μ_F = 0.02
+    
+)
 
 SOC_vol = ic.SOC * ρ_bulk
 println("Initial conditions (SOC-partitioned, ω-diluted):")
@@ -142,36 +241,16 @@ output_times = collect(0.0:dt_output:t_max)
 output_dir = joinpath(@__DIR__, "output")
 isdir(output_dir) || mkpath(output_dir)
 
-# Spatial snapshot times. Loaded toward the front: DOC and bacteria move and
-# crash inside the first two days, so a snapshot set that starts at day 1 shows
-# the aftermath and not the event. Every value must be on the output_times grid.
-# Stops at day 21 — the data range. The summary run still goes to t_max.
-snap_times = [0.0, 0.125, 0.25, 0.5, 1.0, 2.0, 3.0, 5.0, 7.0,
-              10.0, 14.0, 21.0]
-@assert all(t -> any(abs.(output_times .- t) .< 1e-9), snap_times) "snap_times must lie on output_times"
+# Spatial snapshot times for diagnostics
+snap_times = [0.0, 1.0, 5.0, 6.0, 28.0, 29.0, 30.0]
+
+const SOLVER_USED = :stiff    # run_diameter_sweep default; see REFERENCE.md §20a
 
 df_summary, df_snaps = run_diameter_sweep(diam_all, bio, soil, T_func, ψ_func, O2_func;
                                  t_max=t_max, output_times=output_times,
                                  n_grid=n_grid, domain_factor=domain_factor,
                                  ρ_POM=ρ_POM, ic=ic, ω=ω,
-                                 snap_times=snap_times)
-
-## ============================================================
-## Binder and thresholds, added to the spatial profiles
-## ============================================================
-# The binder is what compute_r_agg tests, so it belongs in the profile table
-# rather than being recomputed by every consumer.
-#
-# G_c      — the threshold ACTUALLY IN FORCE at each node, from
-#            critical_binding(soil, r). The same call compute_r_agg makes, so
-#            the column and the reported r_agg cannot disagree.
-# G_c_flat — the same threshold with p_Gc = 0, i.e. the pre-2026-07-29 model.
-#            Carried for comparison only. When p_Gc = 0 the two columns are
-#            identical, which is the check that the flat case still reduces.
-
-df_snaps.binding  = df_snaps.F_i .+ soil.w_E .* df_snaps.E
-df_snaps.G_c      = critical_binding(soil, df_snaps.radius_mm)
-df_snaps.G_c_flat = fill(G_REF, nrow(df_snaps))
+                                 snap_times=snap_times, solver=SOLVER_USED)
 
 ## ============================================================
 ## Save combined summary
@@ -207,7 +286,7 @@ println()
 # it: where the shell is thinner than the coarse sieve class, the split between
 # the three finer classes is indicative only. `pct_gt2000um` is unaffected,
 # because its mineral fraction is zero.
-mineral_classes = MINERAL_CLASSES
+mineral_classes = degryze_mineral_classes(SOIL_ID)
 class_nominals  = DEGRYZE_CLASS_NOMINALS
 
 # No ω here: the sums inside are built from physical particle counts and
@@ -220,7 +299,7 @@ df_pop = population_outputs(df_summary, N_POM;
                             cell_volume_mm3=pop.V_pack,
                             soil_volume_mm3=soil_V,
                             ρ_b=ρ_bulk,
-                            f_C_POM=F_C_POM)
+                            f_C_POM=0.443)
 
 CSV.write(joinpath(output_dir, "population.csv"), df_pop)
 println("✓ Population outputs saved")
@@ -257,7 +336,10 @@ println("="^72)
 println("Population summary at key time points:")
 println("="^72)
 
-for t_check in [0.0, 7.0, 14.0, 21.0, t_max]
+# Convert CO₂ to µg-C/g-soil for display
+soil_mass_per_L = soil_V * ρ_bulk * 1e-6  # grams of soil per liter
+
+for t_check in [0.0, 7.0, 14.0, 21.0, 60.0]
     row = df_pop[argmin(abs.(df_pop.time_days .- t_check)), :]
     co2_per_g = row.CO2_total / soil_mass_per_L
     println("  Day $(Int(t_check)): D_agg(mean) = $(round(row.MWD_agg_only, digits=3)) mm, " *
@@ -288,7 +370,7 @@ soil_names  = ["Soil 1", "Soil 2", "Soil 3", "Soil 4", "Soil 5"]
 p1 = plot(df_pop.time_days, df_pop.MWD_fixed_weight_mm,
           lw=2.5, color=:black, label="Model (soil $(SOIL_ID))",
           xlabel="Time (days)", ylabel="MWD (mm)",
-          title="Mean weight diameter", xlim=(0, t_max), legend=:topleft)
+          title="Mean weight diameter", xlim=(0, 45), legend=:topleft)
 
 if df_mwd_data !== nothing
     t_mwd = df_mwd_data[:, 1]
@@ -315,7 +397,7 @@ end
 p2 = plot(df_pop.time_days, df_pop.pct_gt2000um,
           lw=2.5, color=:black, label="Model (soil $(SOIL_ID))",
           xlabel="Time (days)", ylabel="% of sample mass > 2 mm",
-          title="Large macroaggregates", xlim=(0, t_max), legend=:topleft)
+          title="Large macroaggregates", xlim=(0, 45), legend=:topleft)
 for a in DEGRYZE_OBSERVED
     plot!(p2, 0:21, (0:21) .* a.slope_gt2000,
           ls = :dot, lw = a.id == SOIL_ID ? 2.0 : 1.0,
@@ -335,7 +417,7 @@ p3 = plot(df_pop.time_days, co2_model_ugC_per_gsoil,
           lw=2.5, color=:black, label="Model (soil $(SOIL_ID))",
           xlabel="Time (days)", ylabel="Cum. CO₂ (µg-C/g-soil)",
           title="Cumulative respiration",
-          xlim=(0, t_max), legend=:topleft)
+          xlim=(0, 45), legend=:topleft)
 
 if df_co2_data !== nothing
     t_co2 = df_co2_data[:, 1]
@@ -358,7 +440,7 @@ end
 p4 = plot(df_pop.time_days, df_pop.CO2_flux_total ./ soil_mass_per_L,
           lw=2.5, color=:black, label="Model (no data)",
           xlabel="Time (days)", ylabel="CO₂ flux (µg-C/g-soil/day)",
-          title="Respiration rate", xlim=(0, t_max), legend=:topright)
+          title="Respiration rate", xlim=(0, 45), legend=:topright)
 
 # --- Panel 5: aggregate size classes, as NON-OVERLAPPING ranges ---
 # These are De Gryze eq. (1)'s own four fractions [A%] [B%] [C%] [D%], so they
@@ -366,7 +448,7 @@ p4 = plot(df_pop.time_days, df_pop.CO2_flux_total ./ soil_mass_per_L,
 # "fraction above sieve X" is deliberately not reported: nested curves cannot
 # show mass MOVING between classes, which is the whole signal.
 p5 = plot(xlabel="Time (days)", ylabel="% of sample mass",
-          title="Aggregate size distribution (model)", legend=:right, xlim=(0, t_max))
+          title="Aggregate size distribution (model)", legend=:right, xlim=(0, 45))
 plot!(p5, df_pop.time_days, df_pop.pct_gt2000um,   lw=2, label="> 2.00 mm")
 plot!(p5, df_pop.time_days, df_pop.pct_um250_2000, lw=2, label="0.25 - 2.00 mm")
 plot!(p5, df_pop.time_days, df_pop.pct_um53_250,   lw=2, label="0.05 - 0.25 mm")
@@ -376,177 +458,18 @@ p_all = plot(p1, p2, p3, p4, p5,
              layout = @layout([a b; c d; e]),
              size = (1100, 1200),
              left_margin = 5Plots.mm, bottom_margin = 4Plots.mm,
-             plot_title = "De Gryze (2006) — soil $(SOIL_ID), $(SOLVER_USED) solver  |  " *
-                          "κ_b=$(soil.κ_b), p_Gc=$(soil.p_Gc)")
+             plot_title = "De Gryze (2006) — soil $(SOIL_ID), $(SOLVER_USED) solver")
 
 savefig(p_all, joinpath(output_dir, "degryze_model_vs_data.png"))
 println("✓ Plot saved: $(joinpath(output_dir, "degryze_model_vs_data.png"))")
 display(p_all)
-println()
-
-## ============================================================
-## Radial profiles — every field against radius, at every snapshot
-## ============================================================
-# Same run as everything above; df_snaps is what run_diameter_sweep already
-# returned, so the profiles and the population curves cannot describe different
-# parameter sets.
-#
-# ONE FIGURE PER POM CLASS. The five aggregates differ only in r_0 and r_max,
-# but the threshold now depends on r, so they do not scale onto each other.
-
-prof_times = sort(unique(df_snaps.time_days))
-
-# Log y throughout: the pools span six orders of magnitude and a linear axis
-# shows only the largest.
-prof_color(k) = cgrad(:viridis)[(k - 1) / max(length(prof_times) - 1, 1)]
-
-const PROFILE_FIELDS = [(:C,   "C  DOC"),
-                        (:B,   "B  bacteria"),
-                        (:F_n, "F_n"),
-                        (:F_m, "F_m"),
-                        (:F_i, "F_i insulated"),
-                        (:E,   "E  EPS"),
-                        (:M,   "M  MAOC"),
-                        (:O,   "O  oxygen")]
-
-"""
-    profile_figure(d) -> path
-
-Nine panels for POM diameter `d`: the eight pools, plus the binder against the
-threshold it has to cross with `r_agg` marked on each curve.
-"""
-function profile_figure(d::Real)
-    df_d = filter(:diam_mm => ==(d), df_snaps)
-    r    = filter(:time_days => ==(prof_times[1]), df_d).radius_mm
-    r_0, r_mx = r[1], r[end]
-
-    # r_agg from the summary table rather than recomputed (CLAUDE.md §8).
-    df_s = filter(:diam_mm => ==(d), df_summary)
-    r_agg_at = Dict(t => df_s[argmin(abs.(df_s.time_days .- t)), :r_agg_mm] for t in prof_times)
-
-    panels = map(PROFILE_FIELDS) do (col, ttl)
-        p = plot(xlabel = "r [mm]", ylabel = ttl, title = ttl,
-                 yscale = :log10, legend = false, xlim = (r_0, r_mx))
-        for (k, t) in enumerate(prof_times)
-            sl = filter(:time_days => ==(t), df_d)
-            plot!(p, sl.radius_mm, max.(sl[!, col], 1e-12), lw = 1.6, color = prof_color(k))
-        end
-        p
-    end
-
-    pb = plot(xlabel = "r [mm]", ylabel = "F_i + w_E·E  [µg/mm³]",
-              title = "BINDER vs THRESHOLD", yscale = :log10,
-              xlim = (r_0, r_mx), legend = :topright, legendfontsize = 6)
-    for (k, t) in enumerate(prof_times)
-        sl = filter(:time_days => ==(t), df_d)
-        plot!(pb, sl.radius_mm, max.(sl.binding, 1e-12), lw = 1.8,
-              color = prof_color(k), label = "t=$(t)")
-        # The marker sits ON the threshold curve at the crossing, so it lands on
-        # the red line by construction — one off the line means r_agg and the
-        # threshold in this figure came from different places.
-        scatter!(pb, [r_agg_at[t]], [max(critical_binding(soil, r_agg_at[t]), 1e-12)],
-                 color = prof_color(k), ms = 4, markerstrokewidth = 0.5, label = "")
-    end
-    plot!(pb, r, max.(critical_binding(soil, r), 1e-12), lw = 3, color = :red,
-          label = "G_c(r) IN FORCE  (p_Gc=$(soil.p_Gc))")
-    if soil.p_Gc != 0.0
-        # Reference only, so the effect of the exponent is readable off the same
-        # axes. Not the threshold this run used.
-        plot!(pb, r, fill(G_REF, length(r)), lw = 2, color = :red, ls = :dash,
-              label = "flat reference (p_Gc=0), not used")
-    end
-    vline!(pb, [HYDRO.δ_s], lw = 1, color = :gray, ls = :dot,
-           label = "δ_s = $(round(HYDRO.δ_s, digits=3)) mm (pivot)")
-
-    # The threshold parameters go in the title. Two runs at different κ_b, w_E or
-    # p_Gc produce figures that are otherwise indistinguishable, and the binder
-    # panel is exactly where that would mislead.
-    fig = plot(panels..., pb, layout = (3, 3), size = (1400, 1100),
-               left_margin = 5Plots.mm, bottom_margin = 4Plots.mm,
-               plot_title = "soil $(SOIL_ID), d = $(d) mm  |  " *
-                            "κ_b=$(soil.κ_b), w_E=$(soil.w_E), p_Gc=$(soil.p_Gc), " *
-                            "G_c(δ_s)=$(round(G_REF, sigdigits=3))  |  " *
-                            "dark→light = day $(prof_times[1])→$(prof_times[end])")
-
-    path = joinpath(output_dir, "degryze_profiles_d$(d)mm.png")
-    savefig(fig, path)
-    return path
-end
-
-println("="^72)
-println("RADIAL PROFILES")
-println("="^72)
-
-# --- How far can DOC actually get? ---
-# D_eff_DOC = D_DOC_w · τ · θ/(θ + ρ_b·k_d). The last factor is sorption
-# retardation, and at the k_d values used here it is the dominant one. Diameter
-# independent apart from where the front starts, so printed once.
-let d = DIAM_ALL[cld(length(DIAM_ALL), 2)]
-    tc = SoilAggregateModel.TemperatureCache()
-    SoilAggregateModel.update_temperature_cache!(tc, T_const, bio, soil)
-    far   = filter([:diam_mm, :time_days] => (x, t) -> x == d && t == 0.0, df_snaps)
-    α_eff = SoilAggregateModel.alpha_effective(far.E[end], far.F_i[end], soil)
-    θ0    = van_genuchten(ψ_const, α_eff, soil.n_vg, soil.θ_r, soil.θ_s)
-    τ     = θ0^2 / soil.θ_s^(2/3)
-    Rf    = θ0 / (θ0 + soil.ρ_b * soil.k_d_eq)
-    D_C   = SoilAggregateModel.D_eff_DOC(tc.D_DOC_w, θ0, soil.θ_s, soil.ρ_b, soil.k_d_eq)
-    D_nr  = tc.D_DOC_w * τ                                # same, with no sorption
-
-    println("DOC TRANSPORT  (from the d = $(d) mm surface, r_0 = $(round(d/2, digits=3)) mm)")
-    @printf("  θ = %.4f   θ_s = %.4f   τ = %.4f\n", θ0, soil.θ_s, τ)
-    @printf("  k_d = %.4g mm³/µg = %.0f L/kg   ρ_b·k_d = %.1f\n",
-            soil.k_d_eq, soil.k_d_eq * 1000, soil.ρ_b * soil.k_d_eq)
-    @printf("  retardation θ/(θ+ρ_b·k_d) = %.5f   → transport slowed %.0fx\n", Rf, 1/Rf)
-    @printf("  D_DOC_w = %.2f   D_eff = %.4f mm²/day   (unsorbed would be %.2f)\n",
-            tc.D_DOC_w, D_C, D_nr)
-    @printf("  %8s %12s %12s %12s\n", "day", "√(D·t)", "reaches r =", "unsorbed r =")
-    for t in (1.0, 3.0, 5.0, 21.0)
-        @printf("  %8.1f %12.3f %12.3f %12.3f\n",
-                t, sqrt(D_C*t), d/2 + sqrt(D_C*t), d/2 + sqrt(D_nr*t))
-    end
-    println()
-end
-
-# --- Where each threshold puts the radius, per class ---
-# `model` is what compute_r_agg returned. `flat` is the p_Gc = 0 threshold
-# applied to the SAME profile — arithmetic, not a second run. r_agg does not feed
-# back into the state equations, so the binder profile is identical under both
-# and this comparison is exact rather than indicative.
-println("  r_agg [mm] — model (p_Gc=$(soil.p_Gc)) vs flat threshold")
-@printf("  %8s", "day")
-for d in DIAM_ALL
-    @printf("  %7s %7s", "d$(d)", "flat")
-end
-println()
-for t in prof_times
-    @printf("  %8.3f", t)
-    for d in DIAM_ALL
-        sl = filter([:diam_mm, :time_days] => (x, tt) -> x == d && tt == t, df_snaps)
-        ds = filter(:diam_mm => ==(d), df_summary)
-        ra = ds[argmin(abs.(ds.time_days .- t)), :r_agg_mm]
-        ra_flat = sl.radius_mm[1]
-        for i in nrow(sl):-1:1
-            if sl.binding[i] >= sl.G_c_flat[i]
-                ra_flat = sl.radius_mm[i]; break
-            end
-        end
-        @printf("  %7.3f %7.3f", ra, ra_flat)
-    end
-    println()
-end
-println()
-
-for d in DIAM_ALL
-    println("✓ Plot saved: $(profile_figure(d))")
-end
-
-## ============================================================
-## Carbon accounting checks
-## ============================================================
 
 println()
 println("="^72)
-println("Per-diameter CO₂ at day 21")
+println("✓ De Gryze forward simulation complete")
+println("="^72)
+
+## At day 21, for each diameter class:
 println("="^72)
 
 diams = sort(unique(df_summary.diam_mm))
@@ -556,18 +479,20 @@ for (i, d) in enumerate(diams)
     println("  d=$(d) mm  N=$(round(N_POM[i], digits=1))  CO2=$(round(co2, digits=2))  N×CO2=$(round(N_POM[i]*co2, digits=1))")
 end
 
-raw_sum = sum(N_POM[i] * df_summary[(df_summary.diam_mm .== diams[i]) .& (abs.(df_summary.time_days .- 21.0) .< 0.01), :CO2_cumulative][1] for i in eachindex(diams))
+raw_sum = sum(N_POM[i] * df_summary[(df_summary.diam_mm .== diams[i]) .& (abs.(df_summary.time_days .- 21.0) .< 0.01), :CO2_cumulative][1] for i in 1:5)
 println("\nΣ(N×CO2) = ", round(raw_sum, digits=1))
+println("÷ ω      = ", round(raw_sum / ω, digits=1))
 println("÷ soil_g  = ", round(raw_sum / soil_mass_per_L, digits=1), " µg-C/g-soil")
-println("df_pop CO2 at day 21: ", round(df_pop[argmin(abs.(df_pop.time_days .- 21.0)), :CO2_total] / soil_mass_per_L, digits=1))
+println("\ndf_pop CO2 at day 21: ", round(df_pop[argmin(abs.(df_pop.time_days .- 21.0)), :CO2_total] / soil_mass_per_L, digits=1))
+
 
 # POM is NOT ω-diluted: it is a lumped scalar at each domain centre, not
 # background soil carbon spread over overlapping domains. Dividing by ω here
 # understated the residue input by 28.8x and made CO2 look like 25x overshoot.
-println("\nTotal POM input: ", round(total_POM_C / soil_mass_per_L, digits=1), " µg-C/g-soil")
-println("Expected:        4430.0 µg-C/g-soil")
+total_POM_per_g = sum(N_POM[i] * P_0_per_particle[i] for i in 1:5) / soil_mass_per_L
+println("Total POM input: ", round(total_POM_per_g, digits=1), " µg-C/g-soil")
+println("Expected: 4430 µg-C/g-soil")
 
-println()
-println("="^72)
-println("✓ De Gryze forward simulation complete")
-println("="^72)
+println("Σ(N_i × P_0_i) = ", round(sum(N_POM[i] * P_0_per_particle[i] for i in 1:5), digits=1))
+println("÷ soil_mass_per_L = ", round(sum(N_POM[i] * P_0_per_particle[i] for i in 1:5) / soil_mass_per_L, digits=1))
+println("÷ ω ÷ soil_mass_per_L = ", round(sum(N_POM[i] * P_0_per_particle[i] for i in 1:5) / ω / soil_mass_per_L, digits=1))
