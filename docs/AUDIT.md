@@ -20,6 +20,7 @@ Started 2026-07-29. Dated audits in `docs/` (`STRUCTURAL_AUDIT_2026-07-27.md`,
 | 07-29 | **A3 POM dissolution** | **CLOSED — my finding was wrong.** The manuscript already had the code's additive ½(a+b) form; I checked three internal documents and not the physics spec. REFERENCE §12, ARCHITECTURE §4.2 and GUIDE §8 corrected, with the mechanistic argument for additive stated. |
 | 07-29 | **A6 stale quantisation warning** | **CLOSED.** Deleted from `fitting/sensitivity.jl`. It told the reader not to use gradient-based optimisation because `r_agg` snaps to grid nodes; the sub-grid interpolation removed that and `test_postprocessing.jl` asserts the opposite. |
 | 07-29 | **binder vs `G_c`** | **CLOSED as documentation, no code change.** Not a missing `1/ω`: the binder sums a diluted background contribution and an undiluted residue-derived one, so no single factor applies, and the residue-derived term dominates once decomposition starts. Recorded as a property of the closure — REFERENCE §4.4, `aggregate_radius.jl`, manuscript `r_agg` fifth property. `κ_b` carries the residual and is fitted. |
+| 07-30 | **B cost arm** | **CLOSED ON MEASUREMENT, no `src/` change.** The arm's evidence was `output/profile_flat.txt`, which profiles `run_aggregate` — the solver A4 archives — at parameters that no longer match the config; its largest item, `crank_nicolson.jl`, is unreachable from the production solver. `diagnostics/diagnose_speed.jl` rewritten in place to include `degryze_config.jl` (one fewer forked config, an A5 item) and to profile `run_aggregate_stiff`. Result: one aggregate is 1.16 s, the sparse linear solve is 33.4 % of self-time (`klu_l_refactor` 17.9 %, `klu_l_solve` 15.2 %), and the three proposed hoists sit at 3.0 %, 0.5 % and ~0 %. Not worth the change or the risk of touching the reaction hot path. Also settled: allocation ratio 1.05 between 0.5 d and 1.0 d, so **the RHS does not allocate per call** and the docstring claim holds. **§B is now closed.** |
 | 07-30 | **B pass 4 — sigmoid threshold, Arrhenius family** | **CLOSED, plus two stale entries retracted.** `sigmoid_threshold` in `math_utils.jl` is the single switch behind `h_B`/`h_E`/`h_Fi` and the POM activation delay, which had been written out in both solvers and tested in neither. `SIGMOID_STEEPNESS = 50` and `POM_DELAY_STEEPNESS = 10` replace bare literals. `arrhenius_ratio` and `henry_vant_hoff` now delegate to `arrhenius`, so the package has one exponential of that form rather than three. All bitwise except the POM delay at `t_delay > 0`, which is sub-ulp and which nothing in `paper/` uses. **Retracted: the Van Genuchten and Langmuir–Freundlich entries were already closed when I re-reported them as open** — restated from the audit text rather than re-checked against the tree, the same failure as A3. |
 | 07-30 | **B pass 3 — conservation weight and system carbon** | **CLOSED.** `conservation_weight`/`conservation_weights` in `types.jl` own `4πr²h`; `GridInfo`, `reaction_step.jl` and `api.jl` all call it. `compute_total_carbon` is one loop with `W` / `GridInfo` / `(r_grid, h)` entry points, so the four production call sites pass `grid` and allocate nothing. `total_system_carbon(pools, k)` owns the pools-level total; `carbon_balance_table` gained an `IntegratedPools` method and `result_to_dataframe` now calls it instead of re-deriving. Bitwise result-preserving. New tests pin the stencil property `W_i/(r_i²h²) = 4π/h`, the state-level total against the pools-level one, and the three `compute_total_carbon` entry points against each other. |
 | 07-30 | **B pass 2 — DOC partition and gas literals** | **CLOSED, with one non-bitwise change disclosed.** `sorption_capacity`/`C_aqueous` in `maoc.jl` own `θ + ρ_b·k_d`; six `src/` sites routed through them. `R_GAS`, `P_ATM`, `M_O2` are now the only definitions in `src/`. **`P_ATM = 101325` replaced a bare `101000.0`, moving `O2_CONST` +0.32 % (0.273808 → 0.274689)** — the old value was a rounding, the new one is the definition of 1 atm; effect on rates is fourth-decimal because ambient O₂ sits far above `L_B`/`L_F`. Runs before 07-30 differ in the last digits. |
@@ -145,7 +146,52 @@ Left in place deliberately: `m = 1.0 - 1.0/n` is written in both `van_genuchten`
 
 **Repeated literals.** `src/` is clean: `R_GAS`, `P_ATM`, `M_O2` are the only definitions and `degryze_config.jl` builds `O2_CONST` from them. **Adopting `P_ATM = 101325` was not bitwise result-preserving** — `O2_CONST` moved 0.273808 → 0.274689, +0.32 % — because `101000.0` was a rounding. Every remaining bare `8.314`, `101000.0`, `0.032` sits in `optimize_soil3.jl` or the four `diagnostics/` scripts, which are **now 0.32 % off the production config** as a direct result; that is a second reason A5 should not wait. `0.443` is at 5 sites: `degryze_config.jl:204` (`F_C_POM`, the intended owner), plus independent defaults in `degryze_soils.jl:67` and `postprocess_dataframe.jl:444` and two in `optimize_soil3.jl`. `src/postprocessing/population.jl` correctly requires it with no default. `O2_saturation`, the one function in `src/` whose job ambient O₂ is, is still called by nothing outside its own test.
 
-**Cost arm.** Loop-invariant work in the file already profiled as the bottleneck: `crank_nicolson.jl` rebuilds `1/(r_i²h²)` and both face radii per node per species per half-step — ≈1.6×10⁹ redundant divisions per aggregate-run at the measured step count. `θ_s^(2/3)` is recomputed ≈2.4×10⁸ times, all returning the same number. `reactions.jl:93-127` forms ten rate×Arrhenius products per *node* when the temperature cache is per *step*. `workspace_updates.jl:51` computes `cache.D_Fm` every step and **nothing reads it** — `test_physics.jl:382` says so explicitly.
+**Cost arm — THE EVIDENCE IS FOR THE WRONG SOLVER. Do not act on it as written.**
+
+Every number below traces to `output/profile_flat.txt` (07-28), and that profile has zero `mol` entries: 251 of its 256 snapshots are inside `run_simulation`, i.e. it profiles `run_aggregate`, the split solver — **the one being archived under A4**. It was produced by `diagnostics/diagnose_speed.jl`, which profiled the split solver against a hand-copied parameter set under a header reading "These MUST match run_degryze.jl exactly — a diagnostic of a different parameter set answers a different question." It had stopped matching: `κ_d_ref = 0.001`, `R_P_max = 2.5`, `k_L = 1000`, `101000.0`.
+
+So the two largest items are misdirected. `crank_nicolson.jl` — biggest by the counts, ≈1.6×10⁹ redundant divisions per run — is reached only by the split solver, so hoisting there is work thrown away with the archive. And the ranking that made the other items look worth doing came from the same run.
+
+`diagnose_speed.jl` was rewritten on 07-30 to include `degryze_config.jl` (removing one of the five forked configs — an A5 item) and to profile `run_aggregate_stiff`. **It was run, and the arm is closed on the measurement. No `src/` change was made.**
+
+### The measurement, 07-30 — soil 3, D = 1.175 mm, n = 200, run_aggregate_stiff
+
+One aggregate over 22 days: **1.16 s wall**, 2341 accepted steps, 252 rejected, 7714 f evals, **39 Jacobians**. A full 10-class sweep is ~12 s. Self-time, 665 samples:
+
+| bucket | % self |
+|---|---|
+| **linear algebra / KLU** | **33.4** |
+| pow / `^` | 3.0 |
+| log | 3.5 |
+| exp | 1.7 |
+| `effective_diffusion.jl` | 1.4 |
+| `mol.jl` | 0.8 |
+| `biology/*.jl` | 0.6 |
+| `reactions.jl` | 0.5 |
+| Jacobian / integrator | 0.3 |
+| unattributed leaf arithmetic | 55.0 |
+
+Top two lines are `klu_l_refactor` (17.9 %) and `klu_l_solve` (15.2 %).
+
+**Verdict.** The three proposed hoists sit in buckets of 3.0 %, 0.5 % and ~0 % of a **1.16 s** run — a few tens of milliseconds at the absolute ceiling, and less than that in practice because `θ_a^(10/3)` is genuinely per-node and stays. The single largest identified cost is the sparse linear solve, which no arithmetic hoisting in the RHS can touch. **Closed. Not worth the change or the risk of touching the reaction hot path.**
+
+**Honest caveat on the 55 %.** That bucket is inlined Base leaf operations — `muladd` 7.8 %, `getindex` 7.1 %, `reinterpret` 5.4 %, `abs` 5.3 %, `+` 5.0 %, `*` 4.2 %, and bit ops. Julia attributes inlined Base operations to Base files, so this cannot be apportioned between KLU's sparse inner loops and the model's arithmetic without a different instrument. It does not change the verdict: the ceiling on the hoists is set by the run being 1.16 s, not by the apportionment. `reinterpret`, `&` and `>>` are signatures of the `exp`/`log` kernels, and `muladd`/`getindex` of sparse matrix work; both readings leave the hoists small.
+
+**Allocation (the third open question, now answered).** 16.19 MB at 0.5 d and 17.08 MB at 1.0 d — ratio **1.05**. Allocation does not scale with step count, so **the RHS does not allocate per call** and the "zero allocation" claim in the solver docstrings holds for the hot path. The fixed ~16 MB is the per-output-record `deepcopy` and OrdinaryDiffEq's history, both by design.
+
+**The evidence artefacts are not in the repo.** Both `output/profile_flat.txt` and the new `output/profile_stiff_flat.txt` sit under `paper/de_gryze/output/`, which `.gitignore:31` excludes. A fresh clone cannot check either profile — the same exposure class as `dev_notes/` and `CLAUDE.md`, already noted in §E. The numbers above are quoted into this file, which is tracked, so the basis for closing the arm survives even though the artefacts do not. Anyone wanting to re-derive them runs `diagnostics/diagnose_speed.jl`.
+
+**The real lever, recorded and not acted on.** If this run ever needs to be faster, it is the linear solve, not the arithmetic. Two candidates, neither a Jeppson item: whether `n_grid = 200` is resolving anything `n_grid = 100` would not — KLU's cost grows faster than linearly in the 9 × n_grid unknowns, so this is the cheapest possible win and it is a **modelling** question, not an optimisation hack; and whether the block-tridiagonal structure warrants a specialised solver instead of general sparse KLU. The payoff on a 12 s sweep is a few seconds, so neither is urgent. Where run time actually bites is `fitting/`: 79 evaluations × 1.16 s ≈ 92 s per sensitivity sweep.
+
+### What the arm had proposed, for the record
+
+- **`θ_s^(2/3)` and `θ_s^2`** — soil constants recomputed per node per step in `D_eff_oxygen` and the Millington–Quirk tortuosity, and a non-integer power is a log and an exp. Reached by BOTH solvers, so this one survives the archive. `θ_a^(10/3)` in the same expression is genuinely per-node and stays, which caps the gain.
+- **`reactions.jl:93-127`** — ten rate×Arrhenius products formed per *node* from a cache that is per *step*. Hoisting means the `TemperatureCache` carries temperature-adjusted rates rather than bare Arrhenius factors; that is a struct-field change, which has broken the suite three times (`M_max`, `D_Fm`, and once more), so it wants the four-pattern sweep: `.field`, `:field`, `field =`, and positional calls of the owning type.
+- **`eps.jl` `β = 50/E_min`** — now inside `sigmoid_threshold`, still once per call. Hoisting needs the caller to lift it out of the node loop.
+
+**If the profile shows the KLU solve and Jacobian construction dominating, no arithmetic hoisting in the RHS can pay and this arm closes on the measurement rather than on the work.** That is the likely outcome and it is a legitimate result.
+
+**Closed already:** `workspace_updates.jl:51` computed `cache.D_Fm` every step with nothing reading it — the field and the write are gone.
 
 **Closed 07-29:** `M_max` (two implementations, above) and the `k_ma` unit ambiguity. The `κ_d_ref` override that was masking it is still in place — half its justification is now void and it should be re-examined on the next run.
 
