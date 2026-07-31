@@ -53,6 +53,32 @@ import SoilAggregateModel: compute_total_carbon
         @test all(isnan(rec.mass_balance_error) for rec in result.outputs)
     end
 
+    # ── The outer boundary follows the driver ────────────────────────────────
+    #
+    # The requirement is only that the boundary reads O2_func(t) at t. Nothing is
+    # assumed about how it evolves, so the test uses a STEP — the case a
+    # derivative-based implementation would get wrong.
+    @testset "outer O₂ tracks a time-varying driver" begin
+        O2_step(t) = t < 1.0 ? 0.3 : 0.15
+        kw = (n_grid = 30, output_times = [0.0, 0.9, 1.1, 3.0])
+        r = run_aggregate_stiff(bio, soil, T, ψ, O2_step, (0.0, 3.0); kw...)
+        outer = [rec.state.O[end] for rec in r.outputs]
+
+        # Before the step it sits at the ambient; after it, at half.
+        @test outer[1] > 0.9 * outer[2]
+        @test outer[end] < 0.6 * outer[1]
+        @test outer[3] < outer[2]
+
+        # Constant driver: the outer node holds the ambient rather than drifting.
+        rc = run_aggregate_stiff(bio, soil, T, ψ, O2, (0.0, 3.0); kw...)
+        amb = [rec.state.O[end] for rec in rc.outputs]
+        @test maximum(abs.(amb .- amb[1])) < 1e-3 * amb[1]
+
+        # And it is a boundary, not a wall: the profile falls inward toward the
+        # respiring core, so the domain draws oxygen across that face.
+        @test rc.outputs[end].state.O[end] > rc.outputs[end].state.O[1]
+    end
+
     # ── Defaults ─────────────────────────────────────────────────────────────
     @testset "defaults" begin
         @test N_GRID_DEFAULT == 200

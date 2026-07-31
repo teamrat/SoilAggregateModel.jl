@@ -3,8 +3,17 @@
 **The only list of open work.** Updated as items move; **not** a journal —
 history lives in `docs/REFERENCE.md` §26 and the archived audits.
 
-One rule, because breaking it cost a day: **an item is closed by pointing at code
-or at the manuscript, never at another note.** Three times on 2026-07-30 a closed
+Two rules.
+
+**An item is closed by pointing at code or at the manuscript, never at another
+note.** Breaking it cost a day.
+
+**Do not chase or enforce parameter values** (owner, 2026-07-30). Everything is up
+for grabs. Where a reference exists it records what someone else used or measured
+— these are not physical constants, and a deviation from one is not a defect. The
+first full De Gryze calibration produces the first cut for anything uncited.
+Model-architecture consistency is the standing priority; parameter items are
+recorded for the calibration, not raised as problems. Three times on 2026-07-30 a closed
 item was re-reported as open because the note had not been updated when the source
 was, and the note was read as evidence. If this file and the code disagree, this
 file is what is wrong.
@@ -168,11 +177,15 @@ rescales the transition rate. **δ and β are one decision, not two.**
 
 ---
 
-## 5. Group B parameters off their cited anchors
+## 5. Group B parameters differ from their published values — **NOT a defect**
 
-`D_B_rel` 1000×, `ω_E` 1500×, `ζ` 20×, `r_B_max` 3.7×, `μ_B` 3.3×.
-`REFERENCE.md` §5a, Group B. Return these to their anchors, or record why not,
-**before** any fitting.
+`D_B_rel` 1000×, `ω_E` 1500×, `ζ` 20×, `r_B_max` 3.7×, `μ_B` 3.3×, the Falconer
+`α`/`β` set 4–5× low with mobilisation off. `REFERENCE.md` §5a, Group B.
+
+**Reclassified 2026-07-30.** The earlier text said "return these to their anchors
+before any fitting". That treated published values as constraints, which they are
+not — they record what other authors used or measured. Carried as context for the
+calibration, not as work.
 
 ## 6. `r_agg` step function
 
@@ -214,6 +227,45 @@ and `verify_solver_agreement.jl`. `Workspace`, `update_effective_diffusion!`,
 **What this costs, stated plainly: there is no integrated mass-balance
 measurement in the package today.** `test_closure.jl` still asserts the closure
 identity pointwise, which REFERENCE §17a ranks above the integrated check anyway.
+
+## ~~17. The outer O₂ boundary is frozen at its `t_start` value~~ — **FIXED 2026-07-30**
+
+`mol_rhs!` computes `O2_gas = p.O2_func(t)` and `O_amb = O2_gas / Tc.K_H_O` every
+evaluation (`mol.jl:183,186`) and **discards both**. The outer node's value is set
+once in `mol_solve.jl:96` and `du[mol_sid(n, MOL_O)] = 0.0` holds it there.
+
+**Requirement, and the whole of it: the outer boundary reads `O2_func(t)` at time
+`t`.** How that function evolves — step, ramp, interpolated table — is the
+supplier's business. The model needs no concept of it, and no assumption about
+smoothness.
+
+**Fixed by a ghost-node Dirichlet.** `mol_outer_dirichlet(u_n, D_n, r_n, h, value)`
+in `mol.jl`: a ghost at `r_n + h` carrying `2·value − u_n`, so the face at
+`r_n + h/2` carries `value` exactly. Node `n` is now an ordinary state whose outer
+face exchanges with the ambient. Evaluated pointwise — no derivative, no mass
+matrix, no new parameter, state layout and Jacobian sparsity unchanged.
+
+**A third thing the pin was hiding:** `du[outer] = 0.0` also discarded `S_O` at
+node `n`, so respiration there consumed no oxygen. It does now.
+
+Tested with a **step** driver — the case a derivative-based implementation would
+get wrong — plus a constant-driver check that the outer node holds the ambient
+rather than drifting, and that the profile falls inward, so the face is a boundary
+and not a wall.
+
+Two consequences, both wanted: `state.O[n]` becomes a state that tracks the
+ambient rather than a frozen initial value, and the flux across that face is
+available as the domain's O₂ sink — to be used, if ever, by post-processing.
+**Nothing about that belongs in this model.**
+
+*Rejected: finite-differencing `O_amb(t)` to drive `du[n]`. It makes the model
+depend on the supplier being smooth, which is exactly the coupling to avoid.*
+
+Not a parameter question. Checked at the same time and **correct**: `T` and `ψ`
+are honoured per evaluation — `update_temperature_cache!` is called with
+`T_func(t)` inside the RHS, not cached from `t_start`.
+
+---
 
 ## NEXT — cumulative respiration as an explicit state
 
@@ -334,13 +386,26 @@ resting place.
 
 ---
 
-## 13. REFERENCE.md internal contradictions
+## 13. REFERENCE.md internal contradictions — **VERIFIED 2026-07-30, all four real**
 
-Four, found 2026-07-29 and not yet fixed: §3.2 on `F_i_min`, §3.4 on `K_E`, §7 on
-bacterial allocation, §10 on `Resp_B`. Also §4.2 names `clay_fraction` and
-`silt_fraction`, which do not exist as fields, and the `reactions.jl` citation
-cluster is off by roughly 12 lines. At 2096 lines this file is the one everything
-else points at, so a contradiction in it propagates.
+Checked against the code, not restated. They are **not four independent errors**:
+each is an early table contradicting a later section, and in every case the later
+section is right. §3.2, §3.4, §7 and §10 predate the softplus regularisation and
+the parameter settling; §5a and §17a are current.
+
+| § | says | code says | |
+|---|---|---|---|
+| 3.2 | `F_i_min = 1.0×10⁻⁴` | `parameters.jl:138` → **1.0e-6** | REFERENCE's own line 567 says 1e-6 too, so it contradicts itself *and* the code, by 100× |
+| 3.4 | `K_E = 100·K_B/5` → 2e-3 | `parameters.jl:181` → **1.0e-3**, derived as `50·C_B` | two different derivations; line 560 has the right value with the wrong provenance |
+| 7 | hard branch: `R_B > R_Bb` → `Γ_B = Y_B·R_B·(1−γ)`; else `Γ_B = R_B, Γ_E = 0` | softplus of the difference, and `Γ_B` carries a `−σ(−x)` term §7 omits | §7 describes the discontinuous form the regularisation replaced. §17a has the true one |
+| 10 | `Resp_B = (1−Y_B)·R_B`, "Starvation: 0" | `Resp_B = R_Bb + σ(x)(1−Y_B)` | §10 drops maintenance and claims zero respiration under starvation, when the code keeps `R_Bb` — the physically meaningful part |
+
+**So the fix is not four patches.** The early tables should be regenerated from
+`parameters.jl` and from §17a's proof, which is the section that was written
+carefully. Patching line by line reproduces the stratum.
+
+Also §4.2 names `clay_fraction` and `silt_fraction` as fields; neither exists. The
+`reactions.jl` citation cluster is off by roughly 12 lines.
 
 ---
 
@@ -353,6 +418,69 @@ restoring `0.0143869` on the belief that it was measured; and the note preventin
 fit to a datum the model was constructed from. Lowest priority here, but it is the
 same failure as the documentation sprawl — narrative kept where an invariant
 belongs.
+
+---
+
+## 16. Documentation survey — **DONE 2026-07-30. The plan was wrong.**
+
+I proposed archiving `dev_notes/` and six orphans. Reading them first — which is
+what the item was blocked on — changed the answer.
+
+### Six untracked files are load-bearing
+
+`dev_notes/` is gitignored, and six files in it are cited from `src/`, from
+`README.md` and from `REFERENCE.md`. **A fresh clone gets the citations and not
+the sources.**
+
+| file | cited from |
+|---|---|
+| `falconer_answers.md` (847 lines) | `src/parameters.jl` ×2, `src/biology/fungi.jl`, REFERENCE ×4, GUIDE, CLAUDE |
+| `MATLAB_aggregation_logic.md` (195) | `src/postprocessing/aggregate_radius.jl`, REFERENCE, CLAUDE |
+| `MATLAB_parameters.md` (385) | REFERENCE, CLAUDE |
+| `falconer_questions.md` (202) | **`README.md`** — the front page |
+| `claude_code_instructions_aggregate_stability.md` (210) | REFERENCE |
+| `archive/REPO_REORGANIZATION.md` (262) | REFERENCE, one rename note |
+
+The move is **promote, not archive**: track these, or delete the citations.
+Archiving as originally planned would have broken seven references from `src/`
+and the front page.
+
+### Two files would have taken live information with them
+
+- **`patches/O2_state_variable_change.md`** — the only record of why `state.O` is
+  aqueous rather than total soil O₂. REFERENCE mentions the consequence twice in
+  passing and never the decision. Uncited, and on the original plan I would have
+  archived it.
+- **`docs/julia_falconer_deviations.md`** — cited from REFERENCE ×2, documents
+  live behaviour (`D_eff_fungi_mobile`'s network-dependent diffusivity and its
+  Falconer/MATLAB provenance). Internally stale: names `src/physics/fungi.jl` and
+  `src/physics/reactions.jl`, neither of which has ever existed. Fold into
+  REFERENCE §9a, then retire.
+
+### Two folders nobody has mentioned
+
+- **`scripts/`** — 7 Julia files, 867 lines, February, plus a README. **Every one
+  references archived API**; two are split-solver by name. None can run.
+  `example_1year_simulation.jl` (226 lines) is the only one whose intent may be
+  worth reviving.
+- **`patches/`** — 3 patch fragments, 80 lines, February, plus the O₂ document.
+
+### Uncited and superseded — safe to archive (13 files, ~3,900 lines)
+
+`DEVELOPMENT_ROADMAP.md`, `PHASE1_SPEC_1.1-1.3.md`, `PHASE2_SPEC.md` (plans,
+executed); the four remaining `dev_notes/archive/` files; `paper_framing.md`
+(explicitly "not meant to be direct instruction"); `manuscript_population_upscaling.md`
+and `manuscript_stability_alignment.md` (merged — their target sections exist in
+`manuscript-4-5.tex`); `O2_debugging_handover.md` and `CLAUDE_CODE_INSTRUCTIONS.md`
+(superseded by CLAUDE.md); plus `scripts/` and `patches/`.
+
+`manuscript_changes.md` (root, cited once from `test_postprocessing.jl:337`)
+overlaps REFERENCE §26 errata — merge there rather than archive.
+
+### Revised target
+
+Not "36 → 4". **Promote 6, fold 3, archive 23.** Nothing is destructive until you
+say so.
 
 ---
 

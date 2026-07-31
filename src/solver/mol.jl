@@ -156,6 +156,30 @@ zero flux; Dirichlet species are handled by the caller, which pins the node.
 end
 
 """
+    mol_outer_dirichlet(u_n, D_n, r_n, h, value)
+
+Contribution to the Laplacian at the outer node from a Dirichlet boundary held at
+`value`, already normalised by `r_n² h²` so it adds to `mol_laplacian`.
+
+A ghost node sits at `r_n + h` carrying `2·value − u_n`, so the face at
+`r_n + h/2` carries `value` exactly. The outer-face term is then
+
+    2 · r_{n+1/2}² · D_n · (value − u_n) / (r_n² h²)
+
+**`value` is evaluated pointwise at the current `t` and nothing else is assumed
+about it.** No derivative is taken, so a supplier may hand this model a step, a
+ramp or an interpolated table and the boundary follows it. That is the whole
+requirement — how the ambient evolves is not this model's concern.
+
+Used for oxygen only. The carbon species are zero-flux at the outer boundary:
+nothing leaves the domain.
+"""
+@inline function mol_outer_dirichlet(u_n, D_n, r_n, h, value)
+    r_hp = r_n + 0.5 * h
+    return 2.0 * r_hp * r_hp * D_n * (value - u_n) / (r_n * r_n * h * h)
+end
+
+"""
     mol_rhs!(du, u, p, t)
 
 Right-hand side of the full 8n+1 system.
@@ -239,14 +263,18 @@ function mol_rhs!(du, u, p, t)
         du[mol_sid(i, MOL_E)]  = s.S_E
         du[mol_sid(i, MOL_M)]  = s.S_M
 
-        # Oxygen: Dirichlet at the outer node. The split solver overwrites it
-        # with O_amb on every diffusion half-step, so pinning it here is the
-        # same net condition, not an approximation of it. Its respiration still
-        # respiration at that node still contributes to the carbon budget.
+        # Oxygen. Zero-flux everywhere except the outer face, which exchanges
+        # with the ambient at `O_amb(t)` through a ghost node.
+        #
+        # Until 2026-07-30 this read `du[outer] = 0.0`, pinning the outer VALUE at
+        # whatever `u0` carried while `O_amb` was recomputed each call and thrown
+        # away — so a time-varying O₂ driver was ignored, and the aqueous boundary
+        # did not track temperature through `K_H_O` either. It also discarded
+        # `S_O` at the outer node, so respiration there consumed no oxygen.
+        du[mol_sid(i, MOL_O)] = s.S_O + mol_laplacian(u, D_O, i, n, r_grid, h, MOL_O, 0.0)
         if i == n
-            du[mol_sid(n, MOL_O)] = 0.0
-        else
-            du[mol_sid(i, MOL_O)] = s.S_O + mol_laplacian(u, D_O, i, n, r_grid, h, MOL_O, 0.0)
+            du[mol_sid(n, MOL_O)] += mol_outer_dirichlet(u[mol_sid(n, MOL_O)], D_O[n],
+                                                         r_grid[n], h, O_amb)
         end
     end
 
